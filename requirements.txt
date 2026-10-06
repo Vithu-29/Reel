@@ -1,0 +1,12 @@
+# Core
+Flask>=3.1,<4
+yt-dlp>=2025.1.1
+python-dotenv>=1.0
+
+# Production WSGI server (optional - see README "Running in production")
+gunicorn>=23.0; sys_platform != "win32"
+waitress>=3.0; sys_platform == "win32"
+
+# Dev tooling (optional)
+black>=24.0
+ruff>=0.6

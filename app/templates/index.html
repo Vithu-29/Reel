@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reel &mdash; Media Downloader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- Side rail navigation -->
+  <nav class="rail" aria-label="Main navigation">
+    <div class="rail-brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="22" height="22" fill="none">
+          <circle cx="16" cy="16" r="13" stroke="currentColor" stroke-width="2.2"/>
+          <circle cx="16" cy="16" r="4" fill="currentColor"/>
+          <circle cx="16" cy="6" r="1.6" fill="currentColor"/>
+          <circle cx="16" cy="26" r="1.6" fill="currentColor"/>
+          <circle cx="6" cy="16" r="1.6" fill="currentColor"/>
+          <circle cx="26" cy="16" r="1.6" fill="currentColor"/>
+        </svg>
+      </span>
+      <span class="brand-name">Reel</span>
+    </div>
+
+    <button class="rail-tab is-active" data-tab="download" aria-current="page">
+      <svg viewBox="0 0 24 24" width="19" height="19"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 19h16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Download</span>
+    </button>
+    <button class="rail-tab" data-tab="queue">
+      <svg viewBox="0 0 24 24" width="19" height="19"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+      <span>Queue</span>
+      <span class="rail-badge" id="queueBadge" hidden>0</span>
+    </button>
+    <button class="rail-tab" data-tab="history">
+      <svg viewBox="0 0 24 24" width="19" height="19"><path d="M12 8v5l3 2M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>History</span>
+    </button>
+    <button class="rail-tab" data-tab="search">
+      <svg viewBox="0 0 24 24" width="19" height="19"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>Search</span>
+    </button>
+    <button class="rail-tab" data-tab="settings">
+      <svg viewBox="0 0 24 24" width="19" height="19"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/></svg>
+      <span>Settings</span>
+    </button>
+    <button class="rail-tab" data-tab="about">
+      <svg viewBox="0 0 24 24" width="19" height="19"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M12 11v5M12 8h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>About</span>
+    </button>
+
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle light and dark theme" title="Toggle theme">
+      <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z" fill="currentColor"/></svg>
+      <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" hidden><circle cx="12" cy="12" r="4.5" fill="currentColor"/><g stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8 6 18M18 6l1.8-1.8"/></g></svg>
+    </button>
+  </nav>
+
+  <!-- Mobile bottom bar (mirrors rail tabs) -->
+  <nav class="tabbar" aria-label="Main navigation, mobile">
+    <button class="tabbar-btn is-active" data-tab="download"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 19h16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Download</span></button>
+    <button class="tabbar-btn" data-tab="queue"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg><span>Queue</span></button>
+    <button class="tabbar-btn" data-tab="history"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 8v5l3 2M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>History</span></button>
+    <button class="tabbar-btn" data-tab="search"><svg viewBox="0 0 24 24" width="20" height="20"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Search</span></button>
+    <button class="tabbar-btn" data-tab="settings"><svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87M4.6 9a1.7 1.7 0 0 0-.34-1.87M9 4.6a1.7 1.7 0 0 0 1.55-1.6M15 19.4a1.7 1.7 0 0 0-1.55 1.6" stroke="currentColor" stroke-width="1.4" fill="none"/></svg><span>Settings</span></button>
+  </nav>
+
+  <main class="content">
+
+    <!-- ================= DOWNLOAD ================= -->
+    <section class="panel is-active" id="panel-download">
+      <header class="panel-head">
+        <h1>Download media</h1>
+        <p class="panel-sub">Paste a link from YouTube, TikTok, Instagram, Twitter/X, Reddit, Vimeo and anywhere else yt-dlp supports.</p>
+      </header>
+
+      <div class="stat-strip" id="statStrip">
+        <div class="stat"><span class="stat-value" id="statActive">0</span><span class="stat-label">Active</span></div>
+        <div class="stat"><span class="stat-value" id="statQueued">0</span><span class="stat-label">Queued</span></div>
+        <div class="stat"><span class="stat-value" id="statDone">0</span><span class="stat-label">Completed</span></div>
+        <div class="stat"><span class="stat-value" id="statFailed">0</span><span class="stat-label">Failed</span></div>
+        <div class="stat"><span class="stat-value" id="statSize">0 MB</span><span class="stat-label">Saved</span></div>
+      </div>
+
+      <div class="card dropzone" id="dropzone">
+        <label for="urlInput" class="field-label">Video or playlist link</label>
+        <div class="url-row">
+          <input type="text" id="urlInput" placeholder="Paste a link, or drop it here&hellip;" autocomplete="off" spellcheck="false">
+          <button class="btn btn-ghost" id="pasteBtn" title="Paste from clipboard" type="button">
+            <svg viewBox="0 0 24 24" width="18" height="18"><rect x="7" y="4" width="10" height="16" rx="2" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+          </button>
+        </div>
+        <p class="hint" id="dropHint">Drag &amp; drop a link anywhere on this card &middot; <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste &middot; <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to fetch</p>
+      </div>
+
+      <div class="card preview-card" id="previewCard" hidden>
+        <div class="preview-row">
+          <img id="previewThumb" class="preview-thumb" alt="Video thumbnail" loading="lazy">
+          <div class="preview-meta">
+            <h3 id="previewTitle">&nbsp;</h3>
+            <div class="meta-chips" id="previewChips"></div>
+          </div>
+        </div>
+
+        <div id="playlistNotice" class="playlist-notice" hidden>
+          <strong id="playlistCount">0</strong> items found in this playlist.
+          <div class="seg-control" id="playlistModeControl">
+            <button data-value="single" class="is-active" type="button">Just this video</button>
+            <button data-value="entire" type="button">Entire playlist</button>
+            <button data-value="selected" type="button">Choose items</button>
+          </div>
+          <input type="text" id="playlistItems" class="playlist-items-input" placeholder="e.g. 1,3,5-8" hidden>
+        </div>
+
+        <div class="options-grid">
+          <div class="option">
+            <label for="containerSelect">Format</label>
+            <select id="containerSelect"></select>
+          </div>
+          <div class="option" id="videoQualityWrap">
+            <label for="videoQualitySelect">Video quality</label>
+            <select id="videoQualitySelect"></select>
+          </div>
+          <div class="option" id="audioQualityWrap" hidden>
+            <label for="audioQualitySelect">Audio quality</label>
+            <select id="audioQualitySelect"></select>
+          </div>
+          <div class="option">
+            <label for="savePathInput">Server save folder (optional)</label>
+            <div class="input-with-button">
+              <input type="text" id="savePathInput" placeholder="Leave blank to save via your browser">
+              <button class="btn btn-ghost" id="browseBtn" type="button" title="Browse for a folder">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="toggle-row">
+          <label class="toggle"><input type="checkbox" id="subsToggle"><span>Subtitles</span></label>
+          <label class="toggle"><input type="checkbox" id="thumbToggle"><span>Embed thumbnail</span></label>
+          <label class="toggle"><input type="checkbox" id="metaToggle" checked><span>Embed metadata</span></label>
+          <label class="toggle"><input type="checkbox" id="sponsorToggle"><span>Remove sponsor segments</span></label>
+        </div>
+
+        <button class="btn btn-primary btn-block" id="queueBtn" type="button">
+          <span>Add to queue</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ================= QUEUE ================= -->
+    <section class="panel" id="panel-queue">
+      <header class="panel-head panel-head-row">
+        <div>
+          <h1>Queue</h1>
+          <p class="panel-sub">Downloads run <span id="concurrencyLabel">3</span> at a time.</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn btn-ghost btn-sm" id="clearCompletedBtn" type="button">Clear completed</button>
+          <button class="btn btn-ghost btn-sm" id="clearAllBtn" type="button">Clear all</button>
+        </div>
+      </header>
+      <div class="list" id="queueList">
+        <p class="empty-state">Nothing queued yet &mdash; add a link from the Download tab.</p>
+      </div>
+    </section>
+
+    <!-- ================= HISTORY ================= -->
+    <section class="panel" id="panel-history">
+      <header class="panel-head panel-head-row">
+        <div>
+          <h1>History</h1>
+          <p class="panel-sub">Past downloads, kept locally.</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn btn-ghost btn-sm" id="clearHistoryBtn" type="button">Clear history</button>
+        </div>
+      </header>
+      <div class="list" id="historyList">
+        <p class="empty-state">No downloads yet.</p>
+      </div>
+    </section>
+
+    <!-- ================= SEARCH ================= -->
+    <section class="panel" id="panel-search">
+      <header class="panel-head">
+        <h1>Search YouTube</h1>
+        <p class="panel-sub">Find something to download without leaving the app.</p>
+      </header>
+      <div class="url-row">
+        <input type="text" id="searchInput" placeholder="Search YouTube&hellip;" autocomplete="off">
+        <button class="btn btn-primary" id="searchBtn" type="button">Search</button>
+      </div>
+      <div class="grid-results" id="searchResults"></div>
+    </section>
+
+    <!-- ================= SETTINGS ================= -->
+    <section class="panel" id="panel-settings">
+      <header class="panel-head">
+        <h1>Settings</h1>
+        <p class="panel-sub">Defaults used across the app.</p>
+      </header>
+
+      <div class="card">
+        <div class="options-grid">
+          <div class="option">
+            <label for="settingFolder">Default download folder</label>
+            <div class="input-with-button">
+              <input type="text" id="settingFolder">
+              <button class="btn btn-ghost" id="settingBrowseBtn" type="button">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="option">
+            <label for="settingConcurrency">Simultaneous downloads</label>
+            <input type="number" id="settingConcurrency" min="1" max="10">
+          </div>
+        </div>
+        <div class="toggle-row">
+          <label class="toggle"><input type="checkbox" id="settingSponsor"><span>Remove sponsor segments by default</span></label>
+          <label class="toggle"><input type="checkbox" id="settingMeta"><span>Embed metadata by default</span></label>
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-primary" id="saveSettingsBtn" type="button">Save settings</button>
+          <button class="btn btn-ghost" id="updateYtdlpBtn" type="button">Update yt-dlp</button>
+        </div>
+        <p class="hint" id="updateYtdlpResult"></p>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Keyboard shortcuts</h3>
+        <ul class="shortcut-list">
+          <li><kbd>Ctrl</kbd>+<kbd>V</kbd> <span>Paste a link into the download field</span></li>
+          <li><kbd>Ctrl</kbd>+<kbd>Enter</kbd> <span>Fetch video info / add to queue</span></li>
+          <li><kbd>1</kbd>&ndash;<kbd>5</kbd> <span>Jump between tabs</span></li>
+          <li><kbd>Esc</kbd> <span>Clear the current link</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ================= ABOUT ================= -->
+    <section class="panel" id="panel-about">
+      <header class="panel-head">
+        <h1>About Reel</h1>
+        <p class="panel-sub">A personal media downloader, built on Flask and yt-dlp.</p>
+      </header>
+      <div class="card about-card">
+        <p>Reel runs entirely on your own machine: nothing you download is sent anywhere except the site you're downloading from. It supports every site yt-dlp supports &mdash; YouTube, TikTok, Instagram, Facebook, Twitter/X, Reddit, Vimeo, Dailymotion, Twitch clips, Pinterest, and public Drive/Dropbox links, among others.</p>
+        <p>Only download media you own the rights to, or that's licensed for reuse. Respect each platform's terms of service.</p>
+        <p class="hint">Requires <a href="https://ffmpeg.org/" target="_blank" rel="noopener">ffmpeg</a> on your system PATH for merging, audio extraction, and embedding thumbnails/metadata.</p>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+<script src="{{ url_for('static', filename='js/utils.js') }}"></script>
+<script src="{{ url_for('static', filename='js/downloads.js') }}"></script>
+<script src="{{ url_for('static', filename='js/history.js') }}"></script>
+<script src="{{ url_for('static', filename='js/search.js') }}"></script>
+<script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
