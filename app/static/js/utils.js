@@ -12,14 +12,19 @@ window.Reel = window.Reel || {};
 
   async function api(path, options = {}) {
     const res = await fetch(`/api${path}`, {
-      headers: { "Content-Type": "application/json" },
       ...options,
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": document.querySelector('meta[name="csrf-token"]')?.content || "", ...(options.headers || {}) },
     });
     let body = null;
     try {
       body = await res.json();
     } catch (_) {
       // no body / not JSON - fine for e.g. file downloads
+    }
+    if (res.status === 401) {
+      window.location.replace("/login");
+      throw new Error("Please sign in again.");
     }
     if (!res.ok) {
       const message = (body && body.error) || `Request failed (${res.status})`;
@@ -84,7 +89,7 @@ window.Reel = window.Reel || {};
   Reel.escapeHtml = function (str) {
     const div = document.createElement("div");
     div.textContent = str == null ? "" : String(str);
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   };
 
   // ---- Theme ---------------------------------------------------------

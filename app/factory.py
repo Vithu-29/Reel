@@ -14,14 +14,19 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.config.from_object(Config)
+    from app.services.auth import init_auth
+
+    init_auth(app)
 
     from app import extensions
 
     extensions.init_extensions()
 
     from app.routes.api import api_bp
+    from app.routes.auth import auth_bp
     from app.routes.pages import pages_bp
 
+    app.register_blueprint(auth_bp)
     app.register_blueprint(pages_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
 
@@ -39,6 +44,10 @@ def _apply_security_headers(app: Flask) -> None:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
+        from flask import request
+
+        if request.endpoint != "static":
+            response.headers["Cache-Control"] = "no-store"
         if allowed:
             from flask import request
 

@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
+import threading
 import time
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
 from app import extensions
+from app.config import Config
 from app.models.schemas import DownloadRequest
-from app.services import downloader
+from app.services import diagnostics, downloader
 from app.services import search as search_service
 from app.utils.logger import get_logger
 from app.utils.validators import ValidationError, validate_media_url, validate_save_directory
 
 log = get_logger(__name__)
 api_bp = Blueprint("api", __name__)
+_update_lock = threading.Lock()
 
 # Static option lists the frontend renders into <select> elements. Kept in
 # one place so the UI can never drift from what the backend actually
@@ -44,13 +48,15 @@ def formats():
 def info():
     url = request.args.get("url", "")
     playlist_mode = request.args.get("playlist_mode", "single")
+    if playlist_mode not in {"single", "entire", "selected"}:
+        return _error("Invalid playlist mode.")
     try:
         url = validate_media_url(url)
         data = downloader.extract_info(url, playlist_mode=playlist_mode)
     except ValidationError as exc:
         return _error(str(exc), 400)
     except downloader.DownloadError as exc:
-        return _error(f"Could not read that URL: {exc}", 422)
+        return _error(f"Could not read that URL: {downloader.friendly_error(exc)}", 422)
     except Exception as exc:  # noqa: BLE001
         log.exception("info() failed")
         return _error(f"Unexpected error reading video info: {exc}", 500)
@@ -59,7 +65,29 @@ def info():
 
 @api_bp.post("/download")
 def start_download():
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _error("A JSON object is required.")
+    for name in (
+        "url",
+        "container",
+        "video_quality",
+        "audio_quality",
+        "playlist_mode",
+        "playlist_items",
+        "save_path",
+    ):
+        if name in body and not isinstance(body[name], str):
+            return _error(f"{name} must be text.")
+    for name in (
+        "audio_only",
+        "download_subtitles",
+        "embed_thumbnail",
+        "embed_metadata",
+        "sponsorblock",
+    ):
+        if name in body and not isinstance(body[name], bool):
+            return _error(f"{name} must be true or false.")
     try:
         url = validate_media_url(body.get("url", ""))
         req = DownloadRequest(
@@ -84,6 +112,23 @@ def start_download():
     if req.video_quality not in SUPPORTED_VIDEO_QUALITIES:
         return _error("Unsupported video quality.", 400)
 
+    if req.audio_quality not in SUPPORTED_AUDIO_QUALITIES:
+        return _error("Unsupported audio quality.")
+    if req.playlist_mode not in {"single", "entire", "selected"}:
+        return _error("Invalid playlist mode.")
+    if req.playlist_mode == "selected" and not re.fullmatch(
+        r"[1-9][0-9]*(?:-[1-9][0-9]*)?(?:,[1-9][0-9]*(?:-[1-9][0-9]*)?)*", req.playlist_items
+    ):
+        return _error("Enter playlist items like 1,3,5-8.")
+    if req.save_path:
+        try:
+            validate_save_directory(req.save_path)
+        except ValidationError as exc:
+            return _error(str(exc))
+    if not diagnostics.ffmpeg_available():
+        return _error(
+            "FFmpeg/ffprobe missing. See Settings → Download engine, then restart the app.", 422
+        )
     task_id = extensions.queue_manager.add(req)
     return jsonify({"task_id": task_id}), 201
 
@@ -166,8 +211,12 @@ def download_file(task_id: str):
     if not item or item["status"] != "finished" or not item.get("filepath"):
         return _error("File is not ready.", 404)
     try:
-        return send_file(item["filepath"], as_attachment=True)
-    except (FileNotFoundError, OSError):
+        index = int(request.args.get("index", "0"))
+        files = item.get("files") or [item["filepath"]]
+        if index < 0 or index >= len(files):
+            return _error("Unknown output file.", 404)
+        return send_file(files[index], as_attachment=True)
+    except (FileNotFoundError, OSError, ValueError):
         return _error("That file is no longer on disk.", 404)
 
 
@@ -201,6 +250,23 @@ def redownload(entry_id: int):
         )
     except ValidationError as exc:
         return _error(str(exc), 400)
+    if req.audio_quality not in SUPPORTED_AUDIO_QUALITIES:
+        return _error("Unsupported audio quality.")
+    if req.playlist_mode not in {"single", "entire", "selected"}:
+        return _error("Invalid playlist mode.")
+    if req.playlist_mode == "selected" and not re.fullmatch(
+        r"[1-9][0-9]*(?:-[1-9][0-9]*)?(?:,[1-9][0-9]*(?:-[1-9][0-9]*)?)*", req.playlist_items
+    ):
+        return _error("Enter playlist items like 1,3,5-8.")
+    if req.save_path:
+        try:
+            validate_save_directory(req.save_path)
+        except ValidationError as exc:
+            return _error(str(exc))
+    if not diagnostics.ffmpeg_available():
+        return _error(
+            "FFmpeg/ffprobe missing. See Settings → Download engine, then restart the app.", 422
+        )
     task_id = extensions.queue_manager.add(req)
     return jsonify({"task_id": task_id}), 201
 
@@ -251,7 +317,20 @@ def get_settings():
 
 @api_bp.post("/settings")
 def update_settings():
-    patch = request.get_json(silent=True) or {}
+    patch = request.get_json(silent=True)
+    if not isinstance(patch, dict):
+        return _error("A JSON object is required.")
+    if "concurrency" in patch and (
+        type(patch["concurrency"]) is not int or not 1 <= patch["concurrency"] <= 10
+    ):
+        return _error("Concurrency must be an integer from 1 to 10.")
+    if "download_folder" in patch and not isinstance(patch["download_folder"], str):
+        return _error("Download folder must be text.")
+    for key in ("sponsorblock_default", "embed_metadata_default"):
+        if key in patch and not isinstance(patch[key], bool):
+            return _error(f"{key} must be true or false.")
+    if "theme" in patch and patch["theme"] not in ("dark", "light"):
+        return _error("Theme must be dark or light.")
 
     if "download_folder" in patch and patch["download_folder"]:
         try:
@@ -268,19 +347,37 @@ def update_settings():
     return jsonify(updated)
 
 
+@api_bp.get("/system-status")
+def system_status():
+    return jsonify(diagnostics.report())
+
+
 @api_bp.post("/update-ytdlp")
 def update_ytdlp():
-    """Best-effort self-update of the yt-dlp package via pip."""
+    """Update installed files; the running Python interpreter must be restarted."""
+    if not _update_lock.acquire(blocking=False):
+        return _error("An update is already running.", 409)
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"],
-            capture_output=True,
-            text=True,
-            timeout=120,
+        stats = extensions.queue_manager.stats()
+        if stats["active"] or stats["queued"]:
+            return _error("Finish or clear the queue before updating.", 409)
+        args = [sys.executable, "-m", "pip", "install", "--upgrade"]
+        if Config.YTDLP_CHANNEL == "nightly":
+            args.append("--pre")
+        args.append("yt-dlp[default]")
+        result = subprocess.run(args, capture_output=True, text=True, timeout=180)
+        if result.returncode:
+            log.error("yt-dlp update failed: %s", (result.stdout + result.stderr)[-4000:])
+            return _error(
+                "Update failed. See logs/app.log or run the upgrade command in your terminal.", 500
+            )
+        return jsonify(
+            ok=True,
+            restart_required=True,
+            message="Update installed. Stop the server with Ctrl+C and run python run.py again to activate it.",
         )
-        ok = result.returncode == 0
-        return jsonify({"ok": ok, "output": (result.stdout + result.stderr)[-4000:]}), (
-            200 if ok else 500
-        )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
+        log.exception("yt-dlp update failed")
         return _error(f"Update failed: {exc}", 500)
+    finally:
+        _update_lock.release()

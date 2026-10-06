@@ -8,7 +8,7 @@ from typing import Any
 
 import yt_dlp
 
-from app.config import Config
+from app.services.downloader import _common_opts
 from app.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -21,11 +21,10 @@ def search_youtube(query: str, max_results: int = 12) -> list[dict[str, Any]]:
     max_results = max(1, min(max_results, 30))
 
     opts = {
+        **_common_opts(),
         "quiet": True,
-        "no_warnings": True,
         "extract_flat": "in_playlist",
         "skip_download": True,
-        "http_headers": {"User-Agent": Config.HTTP_USER_AGENT},
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:
