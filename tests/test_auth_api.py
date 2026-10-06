@@ -174,3 +174,58 @@ def test_dotenv_loaded_before_config(tmp_path):
     )
     assert "5678" in result.stdout
     assert "custom-data" in result.stdout
+
+
+@pytest.mark.parametrize("background_path", ["/favicon.ico", "/missing-page", "/api/queue", "/"])
+def test_background_request_does_not_expire_login(app, client, background_path):
+    """Browsers request icons and old tabs poll while a login form is open."""
+    app.extensions["accounts"].set_user("owner", "correct-password-123")
+    client.get("/login")
+    token_from_form = csrf(client)
+    background = client.get(background_path)
+    assert csrf(client) == token_from_form
+    assert "Set-Cookie" not in background.headers
+    response = client.post(
+        "/login",
+        data={
+            "username": "owner",
+            "password": "correct-password-123",
+            "csrf_token": token_from_form,
+        },
+    )
+    assert response.status_code == 302
+    assert client.get("/api/queue").status_code == 200
+
+
+def test_mismatched_login_token_still_rejected(app, client):
+    app.extensions["accounts"].set_user("owner", "correct-password-123")
+    client.get("/login")
+    response = client.post(
+        "/login",
+        data={
+            "username": "owner",
+            "password": "correct-password-123",
+            "csrf_token": "incorrect-token",
+        },
+    )
+    assert response.status_code == 400
+    assert client.get("/api/queue").status_code == 401
+
+
+def test_password_reset_and_old_tab_do_not_invalidate_new_login_form(app, client):
+    sign_in(app, client)
+    app.extensions["accounts"].set_user("owner", "replacement-password-123")
+    client.get("/login")
+    token_from_form = csrf(client)
+    assert client.get("/api/queue").status_code == 401
+    assert csrf(client) == token_from_form
+    response = client.post(
+        "/login",
+        data={
+            "username": "owner",
+            "password": "replacement-password-123",
+            "csrf_token": token_from_form,
+        },
+    )
+    assert response.status_code == 302
+    assert client.get("/api/queue").status_code == 200
