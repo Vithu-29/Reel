@@ -114,3 +114,14 @@ def test_real_download_and_conversion(local_media, container, tmp_path):
     assert path.suffix == "." + container
     assert path.stat().st_size > 0
     assert len(info["_output_files"]) == 1
+
+
+def test_real_download_of_preview_selected_format(local_media, tmp_path):
+    metadata = downloader.extract_info(local_media)
+    assert metadata["video_formats"]
+    source_id = metadata["video_formats"][0]["format_id"]
+    req = DownloadRequest(url=local_media, container="mp4", video_format_id=source_id)
+    info = downloader.run_download(req, str(tmp_path), lambda event: None, lambda: False)
+    path = Path(downloader.resolve_final_filepath(info, req, str(tmp_path)))
+    assert path.suffix == ".mp4"
+    assert path.stat().st_size > 0
