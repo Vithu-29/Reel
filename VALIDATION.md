@@ -28,3 +28,9 @@ The supplied `data/app.db`, `data/settings.json`, existing downloaded media and 
 Reproduced five failures in the previous code: an anonymous favicon request, an unmatched URL, a protected API poll, a protected page request, or a poll after an account reset cleared the login form's CSRF session. The authentication guard now preserves the session on access denial and lets Flask handle unmatched routes normally. Login/logout still rotate/clear the session; invalid account versions still cannot access protected routes.
 
 All 27 authentication/API tests passed after this fix, including six added regression/security cases. The original media conversion code is unchanged. Missing and mismatched CSRF tokens are still rejected. Full browser interaction remains unverified as described above.
+
+## Available-format selection — 6 October 2026
+
+The latest full Python test suite passed **51 tests**, including all previous login-session regressions. Added checks cover public format metadata, missing/estimated sizes, live streams, DRM/audio exclusion, exact source/FPS selection, compatible audio merging, a cross-container intermediate, rejection of stale source IDs, literal handling of IDs, request validation and preservation of the chosen ID in the queue. A synthetic local HTTP media file was inspected and downloaded using the exact format ID returned by the preview. The installed yt-dlp also processed a synthetic split-video/audio selection without downloading from a third-party site.
+
+DOM interaction checks ran the actual dashboard JavaScript in Happy DOM: option labels, exact format submission, audio-only switching, stale selection clearing on URL changes, and playlist caps passed. These are simulated DOM checks, not a full browser rendering test. Ruff and JavaScript syntax checks passed. Live platform availability remains unverified in this environment; the user reported that downloads worked locally before this feature update.
