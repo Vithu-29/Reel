@@ -112,13 +112,18 @@ def init_auth(app):
 
     @app.before_request
     def protect():
-        if request.endpoint == "static":
+        # Let Flask return normal 404/405 responses for unmatched requests
+        # (including the browser's automatic /favicon.ico request).
+        if request.endpoint is None or request.endpoint == "static":
             return None
         public = request.endpoint == "auth.login"
         if not public:
             account = app.extensions["accounts"].get()
             if not account or session.get("account_version") != account["version"]:
-                session.clear()
+                # Keep the anonymous login form's CSRF token intact. An old
+                # tab polling the API must not overwrite the session cookie.
+                # Invalid account versions still fail this check every time;
+                # successful login and explicit logout clear the session.
                 if request.path.startswith("/api/"):
                     return jsonify(error="Please sign in to continue."), 401
                 return redirect(url_for("auth.login"))

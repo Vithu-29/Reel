@@ -22,3 +22,9 @@
 ## Preserved data
 
 The supplied `data/app.db`, `data/settings.json`, existing downloaded media and original log were preserved in the ZIP. New account data, session secrets, test artifacts, bytecode and virtual environments are excluded. Existing persisted folder settings may refer to the old computer location; choose an existing folder in Settings if needed.
+
+## Login session hotfix — 6 October 2026
+
+Reproduced five failures in the previous code: an anonymous favicon request, an unmatched URL, a protected API poll, a protected page request, or a poll after an account reset cleared the login form's CSRF session. The authentication guard now preserves the session on access denial and lets Flask handle unmatched routes normally. Login/logout still rotate/clear the session; invalid account versions still cannot access protected routes.
+
+All 27 authentication/API tests passed after this fix, including six added regression/security cases. The original media conversion code is unchanged. Missing and mismatched CSRF tokens are still rejected. Full browser interaction remains unverified as described above.
