@@ -23,6 +23,7 @@ from yt_dlp.utils import DownloadCancelled, DownloadError
 from app.config import Config
 from app.models.schemas import DownloadRequest, PlaylistMode
 from app.services.diagnostics import ffmpeg_available, js_runtimes
+from app.services.media_formats import select_video_format, video_options
 from app.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -135,6 +136,7 @@ def extract_info(url: str, playlist_mode: str = PlaylistMode.SINGLE.value) -> di
         "uploader": info.get("uploader"),
         "filesize_approx": filesize,
         "resolutions": resolutions,
+        "video_formats": video_options(info),
         "fps": info.get("fps"),
         "vcodec": info.get("vcodec"),
         "acodec": info.get("acodec"),
@@ -143,9 +145,11 @@ def extract_info(url: str, playlist_mode: str = PlaylistMode.SINGLE.value) -> di
     }
 
 
-def _format_selector(req: DownloadRequest) -> str:
+def _format_selector(req: DownloadRequest) -> str | Callable:
     if req.audio_only or req.container in _AUDIO_ONLY_CONTAINERS:
         return "bestaudio/best"
+    if req.video_format_id:
+        return select_video_format(req.video_format_id)
     cap = "" if req.video_quality == "best" else f"[height<={int(req.video_quality.rstrip('p'))}]"
     if req.container == "mp4":
         return f"bestvideo{cap}[ext=mp4]+bestaudio[ext=m4a]/best{cap}[ext=mp4]/bestvideo{cap}+bestaudio/best{cap}"
@@ -220,7 +224,11 @@ def build_ydl_opts(
             "postprocessors": _build_postprocessors(req),
             "progress_hooks": [progress_hook],
             "postprocessor_hooks": [progress_hook],
-            "merge_output_format": (req.container if req.container in {"mp4", "webm"} else None),
+            "merge_output_format": (
+                req.container
+                if not req.video_format_id and req.container in {"mp4", "webm"}
+                else None
+            ),
         }
     )
 

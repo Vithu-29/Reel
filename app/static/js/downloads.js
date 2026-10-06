@@ -24,6 +24,7 @@ window.Reel = window.Reel || {};
     containerSelect: document.getElementById("containerSelect"),
     videoQualityWrap: document.getElementById("videoQualityWrap"),
     videoQualitySelect: document.getElementById("videoQualitySelect"),
+    videoQualityHint: document.getElementById("videoQualityHint"),
     audioQualityWrap: document.getElementById("audioQualityWrap"),
     audioQualitySelect: document.getElementById("audioQualitySelect"),
     savePathInput: document.getElementById("savePathInput"),
@@ -49,15 +50,16 @@ window.Reel = window.Reel || {};
   let lastInfoUrl = "";
   let fetchTimer = null;
   let infoGeneration = 0;
+  let currentInfo = null;
+  let fallbackQualities = ["best"];
 
   // ---- Options population --------------------------------------------
 
   async function loadFormats() {
     const data = await Reel.get("/formats");
     el.containerSelect.innerHTML = data.containers.map((c) => `<option value="${c}">${c.toUpperCase()}</option>`).join("");
-    el.videoQualitySelect.innerHTML = data.video_qualities
-      .map((q) => `<option value="${q}">${q === "best" ? "Best available" : q}</option>`)
-      .join("");
+    fallbackQualities = data.video_qualities;
+    renderQualityOptions();
     el.audioQualitySelect.innerHTML = data.audio_qualities
       .map((q) => `<option value="${q}">${q === "best" ? "Best available" : q + " kbps"}</option>`)
       .join("");
@@ -67,6 +69,47 @@ window.Reel = window.Reel || {};
     const isAudio = AUDIO_CONTAINERS.has(el.containerSelect.value);
     el.videoQualityWrap.hidden = isAudio;
     el.audioQualityWrap.hidden = !isAudio;
+    renderQualityOptions();
+  }
+
+  function renderQualityOptions() {
+    const previous = el.videoQualitySelect.value;
+    el.videoQualitySelect.replaceChildren();
+    const add = (value, label) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      el.videoQualitySelect.appendChild(option);
+    };
+    add("best", "Best available (automatic)");
+    if (currentInfo && !currentInfo.is_playlist) {
+      const formats = currentInfo.video_formats || [];
+      for (const f of formats) {
+        const bits = [f.height ? `${f.height}p` : "Original resolution"];
+        if (f.fps) bits.push(`${f.fps} fps`);
+        bits.push((f.ext || "video").toUpperCase());
+        if (f.vcodec && f.vcodec !== "none") bits.push(f.vcodec.split(".")[0]);
+        if (f.dynamic_range && f.dynamic_range !== "SDR") bits.push(f.dynamic_range);
+        bits.push(f.source_bytes ? `${f.size_estimated ? "~" : ""}${Reel.formatBytes(f.source_bytes)}` : "Size unavailable");
+        bits.push(`#${f.format_id}`);
+        add(`source:${f.format_id}`, bits.join(" · "));
+      }
+      el.videoQualityHint.textContent = formats.length
+        ? "Source stream sizes are shown; ~ means estimated. Separate audio and conversion can change the final size."
+        : "The source did not report individual qualities. Automatic selection is available.";
+    } else if (currentInfo?.is_playlist) {
+      fallbackQualities.filter(q => q !== "best").forEach(q => add(q, `Up to ${q}`));
+      el.videoQualityHint.textContent = "Playlist quality is a maximum per video; available formats differ between items.";
+    } else {
+      el.videoQualityHint.textContent = "Paste a link to check its available qualities.";
+    }
+    if ([...el.videoQualitySelect.options].some(o => o.value === previous)) el.videoQualitySelect.value = previous;
+  }
+
+  function selectedVideoFormat() {
+    if (AUDIO_CONTAINERS.has(el.containerSelect.value) || currentInfo?.is_playlist || lastInfoUrl !== el.urlInput.value.trim()) return null;
+    const value = el.videoQualitySelect.value;
+    return (currentInfo?.video_formats || []).find(f => `source:${f.format_id}` === value) || null;
   }
 
   // ---- Info preview ----------------------------------------------------
@@ -75,6 +118,10 @@ window.Reel = window.Reel || {};
     el.previewCard.hidden = true;
     el.playlistNotice.hidden = true;
     lastInfoUrl = "";
+    currentInfo = null;
+    playlistMode = "single";
+    el.videoQualitySelect.value = "best";
+    renderQualityOptions();
     infoGeneration++;
   }
 
@@ -94,6 +141,8 @@ window.Reel = window.Reel || {};
   }
 
   function renderPreview(data) {
+    currentInfo = data;
+    renderQualityOptions();
     el.previewCard.hidden = false;
     if (data.is_playlist) {
       el.previewThumb.src = (data.entries[0] && data.entries[0].thumbnail) || "";
@@ -104,6 +153,7 @@ window.Reel = window.Reel || {};
       playlistMode = "single";
       updatePlaylistModeButtons();
     } else {
+      playlistMode = "single";
       el.previewThumb.src = data.thumbnail || "";
       el.previewTitle.textContent = data.title || "Untitled";
       const chips = [];
@@ -134,6 +184,7 @@ window.Reel = window.Reel || {};
   // ---- URL input: paste / drag&drop / debounce fetch --------------------
 
   function scheduleFetch() {
+    if (el.urlInput.value.trim() !== lastInfoUrl) resetPreview();
     clearTimeout(fetchTimer);
     fetchTimer = setTimeout(() => fetchInfo(el.urlInput.value.trim()), 500);
   }
@@ -193,10 +244,13 @@ window.Reel = window.Reel || {};
       return;
     }
     const container = el.containerSelect.value;
+    const chosen = selectedVideoFormat();
+    const sourceChoice = el.videoQualitySelect.value.startsWith("source:");
     const payload = {
       url,
       container,
-      video_quality: el.videoQualitySelect.value,
+      video_quality: sourceChoice ? "best" : el.videoQualitySelect.value,
+      video_format_id: chosen?.format_id || "",
       audio_only: AUDIO_CONTAINERS.has(container),
       audio_quality: el.audioQualitySelect.value,
       playlist_mode: playlistMode,
@@ -250,7 +304,7 @@ window.Reel = window.Reel || {};
     } else if (s === "finished") {
       subBits.push(item.options.save_path ? `Saved to ${item.options.save_path}` : "Ready to download");
     } else {
-      subBits.push(item.options.container.toUpperCase(), item.options.video_quality);
+      subBits.push(item.options.container.toUpperCase(), item.options.video_format_id ? `Source #${item.options.video_format_id}` : item.options.video_quality);
     }
 
     const actions = [];
