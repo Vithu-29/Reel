@@ -11,3 +11,10 @@ logs/*
 !logs/.gitkeep
 .DS_Store
 *.egg-info/
+
+# Local account and session key
+/data/auth.db*
+/data/session.key
+cookies*.txt
+.pytest_cache/
+.ruff_cache/

@@ -65,6 +65,7 @@ class QueueItem:
     total_bytes: int = 0
     filename: Optional[str] = None
     filepath: Optional[str] = None
+    files: list[str] = field(default_factory=list)
     error: Optional[str] = None
     created_at: float = field(default_factory=time)
     updated_at: float = field(default_factory=time)

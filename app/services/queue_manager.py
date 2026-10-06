@@ -42,9 +42,11 @@ class QueueManager:
         self._paused_ids: set[str] = set()
         self._lock = threading.RLock()
         self._pending: "queue.Queue[str]" = queue.Queue()
-        self._max_workers = max_workers or Config.MAX_CONCURRENT_DOWNLOADS
+        self._max_workers = max(1, min(10, int(max_workers or Config.MAX_CONCURRENT_DOWNLOADS)))
         self._worker_threads: list[threading.Thread] = []
-        for i in range(self._max_workers):
+        self._condition = threading.Condition(self._lock)
+        self._active_workers = 0
+        for i in range(10):
             self._spawn_worker(i)
 
     # -- worker plumbing -----------------------------------------------
@@ -61,24 +63,26 @@ class QueueManager:
 
     def set_concurrency(self, n: int) -> None:
         n = max(1, min(n, 10))
-        with self._lock:
-            old = self._max_workers
+        with self._condition:
             self._max_workers = n
-        if n > old:
-            for i in range(old, n):
-                self._spawn_worker(i)
+            self._condition.notify_all()
         log.info("Queue concurrency set to %s", n)
 
     def _worker_loop(self, index: int) -> None:
         while True:
-            with self._lock:
-                if index >= self._max_workers:
-                    return  # concurrency was reduced; retire this worker
+            task_id = self._pending.get()
+            with self._condition:
+                self._condition.wait_for(lambda: self._active_workers < self._max_workers)
+                self._active_workers += 1
             try:
-                task_id = self._pending.get(timeout=1)
-            except queue.Empty:
-                continue
-            self._run_task(task_id)
+                self._run_task(task_id)
+            except Exception:
+                log.exception("Unexpected queue worker failure")
+            finally:
+                with self._condition:
+                    self._active_workers -= 1
+                    self._condition.notify_all()
+                self._pending.task_done()
 
     # -- public API -------------------------------------------------------
 
@@ -210,6 +214,7 @@ class QueueManager:
         try:
             while True:
                 self._pending.get_nowait()
+                self._pending.task_done()
         except queue.Empty:
             pass
         return count
@@ -221,8 +226,8 @@ class QueueManager:
             item = self._tasks.get(task_id)
             if item is None:
                 return
-            if item.status == TaskStatus.CANCELED.value:
-                return  # canceled while it was still sitting in the queue
+            if item.status != TaskStatus.QUEUED.value:
+                return  # Ignore duplicate resume IDs and tasks already started/completed.
             if task_id in self._paused_ids:
                 return  # pause() flips status but leaves it out of the run
             item.status = TaskStatus.STARTING.value
@@ -250,15 +255,19 @@ class QueueManager:
                 # (e.g. an unplugged drive) - fall back rather than losing
                 # the download entirely, but tell the user what happened.
                 log.warning(
-                    "Configured default download folder %r is unusable (%s); " "falling back to %s",
+                    "Configured default download folder %r is unusable (%s); falling back to %s",
                     target_dir,
                     exc,
                     Config.DEFAULT_DOWNLOAD_FOLDER,
                 )
                 save_dir = Config.DEFAULT_DOWNLOAD_FOLDER
             else:
-                self._finish_with_error(task_id, str(exc))
+                self._finish_with_error(task_id, downloader.friendly_error(exc))
                 return
+
+        if not server_mode:
+            save_dir = os.path.join(save_dir, task_id)
+            os.makedirs(save_dir, exist_ok=True)
 
         def on_progress(evt: downloader.ProgressEvent) -> None:
             with self._lock:
@@ -269,8 +278,9 @@ class QueueManager:
                 it.percent = evt.percent
                 it.speed = evt.speed
                 it.eta = evt.eta
-                it.downloaded_bytes = evt.downloaded_bytes
-                it.total_bytes = evt.total_bytes
+                if evt.status == "downloading":
+                    it.downloaded_bytes = evt.downloaded_bytes
+                    it.total_bytes = evt.total_bytes
                 if evt.filename:
                     it.filename = os.path.basename(evt.filename)
 
@@ -281,7 +291,15 @@ class QueueManager:
             info = downloader.run_download(req, save_dir, on_progress, should_cancel)
             filepath = downloader.resolve_final_filepath(info, req, save_dir)
             with self._lock:
-                it = self._tasks[task_id]
+                it = self._tasks.get(task_id)
+                if it is None:
+                    return  # Clear queue was pressed while the download was finishing.
+                if cancel_event.is_set():
+                    it.status = TaskStatus.CANCELED.value
+                    return
+                it.files = info.get("_output_files", [filepath])
+                it.total_bytes = sum(os.path.getsize(f) for f in it.files if os.path.isfile(f))
+                it.downloaded_bytes = it.total_bytes
                 it.status = TaskStatus.FINISHED.value
                 it.percent = 100.0
                 it.filepath = filepath
@@ -293,15 +311,17 @@ class QueueManager:
                 url=req.url,
                 resolution=req.video_quality,
                 container=req.container,
-                status="finished" if server_mode else "downloaded (browser)",
+                status="finished" if server_mode else "ready for browser",
                 filepath=filepath if server_mode else None,
             )
         except downloader.DownloadCanceled:
             with self._lock:
-                self._tasks[task_id].status = TaskStatus.CANCELED.value
+                it = self._tasks.get(task_id)
+                if it is not None:
+                    it.status = TaskStatus.CANCELED.value
         except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
             log.exception("Download failed for task %s", task_id)
-            self._finish_with_error(task_id, str(exc))
+            self._finish_with_error(task_id, downloader.friendly_error(exc))
 
     def _finish_with_error(self, task_id: str, message: str) -> None:
         with self._lock:

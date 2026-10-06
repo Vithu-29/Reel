@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — Reel</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+</head>
+<body class="login-page">
+<main class="login-card">
+  <div class="login-logo" aria-hidden="true">▶</div>
+  <p class="login-eyebrow">REEL · YOUR MEDIA SPACE</p>
+  <h1>Welcome back.</h1>
+  <p class="login-description">Sign in to manage your downloads.</p>
+  {% if error %}<div class="login-error" role="alert">{{ error }}</div>{% endif %}
+  {% if configured %}
+  <form method="post" action="{{ url_for('auth.login') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" maxlength="64" required autofocus>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required>
+    <button class="btn btn-primary" type="submit">Sign in <span aria-hidden="true">→</span></button>
+  </form>
+  {% else %}
+  <div class="login-setup">Create your account from the project folder:<code>python manage.py set-user</code>Then reload this page to sign in.</div>
+  {% endif %}
+  <p class="login-footer">Your personal download workspace.</p>
+</main>
+</body>
+</html>

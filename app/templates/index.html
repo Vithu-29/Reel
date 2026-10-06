@@ -2,6 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
+<meta name="csrf-token" content="{{ csrf_token() }}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Reel &mdash; Media Downloader</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -71,6 +72,13 @@
   </nav>
 
   <main class="content">
+    <div class="account-bar">
+      <span>Signed in as <strong>{{ session.username }}</strong></span>
+      <form method="post" action="{{ url_for('auth.logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-ghost btn-sm" type="submit">Sign out</button>
+      </form>
+    </div>
 
     <!-- ================= DOWNLOAD ================= -->
     <section class="panel is-active" id="panel-download">
@@ -231,7 +239,12 @@
           <button class="btn btn-primary" id="saveSettingsBtn" type="button">Save settings</button>
           <button class="btn btn-ghost" id="updateYtdlpBtn" type="button">Update yt-dlp</button>
         </div>
-        <p class="hint" id="updateYtdlpResult"></p>
+        <p class="hint" id="updateYtdlpResult" aria-live="polite"></p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Download engine</h3>
+        <p id="systemStatus" class="hint" aria-live="polite">Checking installed dependencies…</p>
+        <button class="btn btn-ghost btn-sm" id="refreshSystemBtn" type="button">Check again</button>
       </div>
 
       <div class="card">
@@ -252,7 +265,7 @@
         <p class="panel-sub">A personal media downloader, built on Flask and yt-dlp.</p>
       </header>
       <div class="card about-card">
-        <p>Reel runs entirely on your own machine: nothing you download is sent anywhere except the site you're downloading from. It supports every site yt-dlp supports &mdash; YouTube, TikTok, Instagram, Facebook, Twitter/X, Reddit, Vimeo, Dailymotion, Twitch clips, Pinterest, and public Drive/Dropbox links, among others.</p>
+        <p>Reel runs entirely on your own machine: nothing you download is sent anywhere except the site you're downloading from. It uses yt-dlp integrations &mdash; availability depends on each link and platform. Examples include YouTube, TikTok, Instagram, Facebook, Twitter/X, Reddit, Vimeo, Dailymotion, Twitch clips, Pinterest, and public Drive/Dropbox links, among others.</p>
         <p>Only download media you own the rights to, or that's licensed for reuse. Respect each platform's terms of service.</p>
         <p class="hint">Requires <a href="https://ffmpeg.org/" target="_blank" rel="noopener">ffmpeg</a> on your system PATH for merging, audio extraction, and embedding thumbnails/metadata.</p>
       </div>

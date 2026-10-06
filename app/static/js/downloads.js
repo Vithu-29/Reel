@@ -48,6 +48,7 @@ window.Reel = window.Reel || {};
   let playlistMode = "single";
   let lastInfoUrl = "";
   let fetchTimer = null;
+  let infoGeneration = 0;
 
   // ---- Options population --------------------------------------------
 
@@ -74,15 +75,19 @@ window.Reel = window.Reel || {};
     el.previewCard.hidden = true;
     el.playlistNotice.hidden = true;
     lastInfoUrl = "";
+    infoGeneration++;
   }
 
   async function fetchInfo(url) {
     if (!url || !Reel.looksLikeUrl(url) || url === lastInfoUrl) return;
     lastInfoUrl = url;
+    const generation = ++infoGeneration;
     try {
       const data = await Reel.get(`/info?url=${encodeURIComponent(url)}&playlist_mode=entire`);
+      if (generation !== infoGeneration || el.urlInput.value.trim() !== url) return;
       renderPreview(data);
     } catch (err) {
+      if (generation !== infoGeneration || el.urlInput.value.trim() !== url) return;
       Reel.toast(err.message, "error");
       resetPreview();
     }
@@ -253,12 +258,15 @@ window.Reel = window.Reel || {};
     if (s === "paused") actions.push(btn(item.task_id, "resume", "Resume"));
     if (["queued", "paused", "starting", "downloading", "processing"].includes(s)) actions.push(btn(item.task_id, "cancel", "Cancel"));
     if (["error", "canceled"].includes(s)) actions.push(btn(item.task_id, "retry", "Retry"));
-    if (s === "finished" && !item.options.save_path) actions.push(`<a class="btn btn-ghost btn-sm" href="/api/download-file/${item.task_id}">Save file</a>`);
+    if (s === "finished" && !item.options.save_path) {
+      const files = item.files?.length ? item.files : [item.filepath];
+      files.forEach((_, index) => actions.push(`<a class="btn btn-ghost btn-sm" href="/api/download-file/${item.task_id}?index=${index}">Save ${files.length > 1 ? "file " + (index + 1) : "file"}</a>`));
+    }
 
     return `
       <div class="item-card" data-task-id="${item.task_id}">
         <div class="item-top">
-          ${item.thumbnail ? `<img class="item-thumb" src="${item.thumbnail}" alt="">` : '<div class="item-thumb"></div>'}
+          ${item.thumbnail ? `<img class="item-thumb" src="${Reel.escapeHtml(item.thumbnail)}" alt="">` : '<div class="item-thumb"></div>'}
           <div class="item-info">
             <div class="item-title">${Reel.escapeHtml(item.title || item.url)}</div>
             <div class="item-sub"><span class="status-pill ${s}">${statusLabel(s)}</span>${subBits.map((b) => `<span>${Reel.escapeHtml(b)}</span>`).join("")}</div>

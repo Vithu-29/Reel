@@ -12,7 +12,9 @@ module knows nothing about threads.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import yt_dlp
@@ -20,6 +22,7 @@ from yt_dlp.utils import DownloadCancelled, DownloadError
 
 from app.config import Config
 from app.models.schemas import DownloadRequest, PlaylistMode
+from app.services.diagnostics import ffmpeg_available, js_runtimes
 from app.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -49,17 +52,20 @@ class ProgressEvent:
 def _common_opts() -> dict[str, Any]:
     opts: dict[str, Any] = {
         "quiet": True,
-        "no_warnings": True,
+        "no_warnings": False,
+        "logger": log,
+        "js_runtimes": js_runtimes(),
         "noprogress": True,
-        "http_headers": {
-            "User-Agent": Config.HTTP_USER_AGENT,
-        },
         # Sensible resilience defaults - a personal downloader shouldn't
         # hammer a site or hang forever on a bad connection.
         "retries": 5,
         "fragment_retries": 5,
         "socket_timeout": 30,
     }
+    if Config.HTTP_USER_AGENT:
+        opts["http_headers"] = {"User-Agent": Config.HTTP_USER_AGENT}
+    if Config.FFMPEG_LOCATION:
+        opts["ffmpeg_location"] = Config.FFMPEG_LOCATION
     if Config.COOKIES_FROM_BROWSER:
         opts["cookiesfrombrowser"] = (Config.COOKIES_FROM_BROWSER,)
     if Config.COOKIES_FILE:
@@ -104,11 +110,7 @@ def extract_info(url: str, playlist_mode: str = PlaylistMode.SINGLE.value) -> di
                     "id": e.get("id"),
                     "title": e.get("title"),
                     "duration": e.get("duration"),
-                    "thumbnail": (
-                        e.get("thumbnail") or e.get("thumbnails", [{}])[-1].get("url")
-                        if e.get("thumbnails")
-                        else None
-                    ),
+                    "thumbnail": e.get("thumbnail") or (e.get("thumbnails") or [{}])[-1].get("url"),
                 }
                 for i, e in enumerate(entries)
             ],
@@ -144,10 +146,12 @@ def extract_info(url: str, playlist_mode: str = PlaylistMode.SINGLE.value) -> di
 def _format_selector(req: DownloadRequest) -> str:
     if req.audio_only or req.container in _AUDIO_ONLY_CONTAINERS:
         return "bestaudio/best"
-    if req.video_quality == "best":
-        return "bestvideo*+bestaudio/best"
-    height = int(req.video_quality.replace("p", ""))
-    return f"bestvideo*[height<={height}]+bestaudio/best[height<={height}]"
+    cap = "" if req.video_quality == "best" else f"[height<={int(req.video_quality.rstrip('p'))}]"
+    if req.container == "mp4":
+        return f"bestvideo{cap}[ext=mp4]+bestaudio[ext=m4a]/best{cap}[ext=mp4]/bestvideo{cap}+bestaudio/best{cap}"
+    if req.container == "webm":
+        return f"bestvideo{cap}[ext=webm]+bestaudio[ext=webm]/best{cap}[ext=webm]/bestvideo{cap}+bestaudio/best{cap}"
+    return f"bestvideo{cap}+bestaudio/best{cap}"
 
 
 def _build_postprocessors(req: DownloadRequest) -> list[dict[str, Any]]:
@@ -184,7 +188,7 @@ def _build_postprocessors(req: DownloadRequest) -> list[dict[str, Any]]:
             }
         )
 
-    if req.embed_thumbnail:
+    if req.embed_thumbnail and req.container in {"mp3", "m4a", "flac", "mp4"}:
         pps.append({"key": "EmbedThumbnail"})
 
     if req.embed_metadata:
@@ -208,7 +212,8 @@ def build_ydl_opts(
             "restrictfilenames": False,
             "windowsfilenames": True,  # keep filenames valid on Windows too
             "noplaylist": noplaylist,
-            "writethumbnail": req.embed_thumbnail,
+            "writethumbnail": req.embed_thumbnail
+            and req.container in {"mp3", "m4a", "flac", "mp4"},
             "writesubtitles": req.download_subtitles,
             "writeautomaticsub": False,
             "subtitleslangs": ["en", "en-orig"] if req.download_subtitles else [],
@@ -266,7 +271,22 @@ def run_download(
         elif status == "error":
             on_progress(ProgressEvent(status="error"))
 
+    if should_cancel():
+        raise DownloadCanceled("Canceled by user")
+    if not ffmpeg_available():
+        raise DownloadError(
+            "FFmpeg and ffprobe are required. Install FFmpeg, add its bin folder to PATH and restart the app."
+        )
+    output_files = []
+
+    def after_move(filename):
+        # yt-dlp invokes post_hooks with the FINAL path after conversions/moves.
+        if should_cancel():
+            raise DownloadCancelled("Canceled by user")
+        output_files.append(str(Path(filename).resolve()))
+
     ydl_opts = build_ydl_opts(req, save_dir, hook)
+    ydl_opts["post_hooks"] = [after_move]
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -274,31 +294,32 @@ def run_download(
     except DownloadCancelled as exc:
         raise DownloadCanceled(str(exc)) from exc
 
-    return info or {}
+    if should_cancel():
+        raise DownloadCanceled("Canceled by user")
+    if not info or not output_files:
+        raise DownloadError("The download produced no media files.")
+    info["_output_files"] = list(dict.fromkeys(output_files))
+    return info
 
 
 def resolve_final_filepath(info: dict[str, Any], req: DownloadRequest, save_dir: str) -> str:
-    """Best-effort reconstruction of the final on-disk filename after
-    postprocessing (container conversion/extraction can change the
-    extension yt-dlp reports in `info`).
-    """
-    import os
+    """Only return paths reported for THIS download, never the newest unrelated file."""
+    base = Path(save_dir).resolve()
+    for filename in info.get("_output_files", []):
+        candidate = Path(filename).resolve()
+        if candidate.is_file() and candidate.is_relative_to(base):
+            return str(candidate)
+    raise DownloadError("The output file could not be located. Check the download folder.")
 
-    requested_ext = req.container if req.container else info.get("ext", "mp4")
-    base = info.get("_filename") or info.get("filename")
-    if base:
-        stem, _ = os.path.splitext(base)
-        candidate = f"{stem}.{requested_ext}"
-        if os.path.exists(candidate):
-            return candidate
-        if os.path.exists(base):
-            return base
-    # Fall back to searching the save dir for the most recently modified file.
-    files = [os.path.join(save_dir, f) for f in os.listdir(save_dir)]
-    files = [f for f in files if os.path.isfile(f)]
-    if not files:
-        return base or ""
-    return max(files, key=os.path.getmtime)
+
+def friendly_error(exc):
+    text = re.sub(r"\x1b\[[0-9;]*m", "", str(exc))
+    if "403" in text:
+        text += (
+            " Try Settings → Update yt-dlp, then restart the server. Check the dependency status. "
+            "Some links also require your own authorized browser session; an update alone cannot guarantee access."
+        )
+    return text
 
 
 def _human_rate(bytes_per_sec: Optional[float]) -> Optional[str]:

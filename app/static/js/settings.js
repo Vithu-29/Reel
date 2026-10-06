@@ -53,8 +53,8 @@ window.Reel = window.Reel || {};
     el.updateResult.textContent = "Updating yt-dlp…";
     try {
       const data = await Reel.post("/update-ytdlp");
-      el.updateResult.textContent = data.ok ? "yt-dlp is up to date." : "Update finished with errors — see server logs.";
-      Reel.toast(data.ok ? "yt-dlp updated." : "yt-dlp update had errors.", data.ok ? "success" : "error");
+      el.updateResult.textContent = data.message;
+      Reel.toast("Update installed. Restart the server to activate it.", "success", 8000);
     } catch (err) {
       el.updateResult.textContent = "";
       Reel.toast(err.message, "error");
@@ -63,7 +63,15 @@ window.Reel = window.Reel || {};
     }
   });
 
-  Reel.initSettings = load;
+  async function loadStatus() {
+    const status = document.getElementById("systemStatus");
+    try {
+      const s = await Reel.get("/system-status");
+      status.textContent = `yt-dlp ${s.yt_dlp} · Flask ${s.flask} · FFmpeg ${s.ffmpeg ? "ready" : "missing"} · JavaScript: ${s.js_runtimes.join(", ") || "missing"} · EJS ${s.ejs || "missing"}. ${s.warnings.join(" ")}`;
+    } catch (err) { status.textContent = err.message; }
+  }
+  document.getElementById("refreshSystemBtn").addEventListener("click", loadStatus);
+  Reel.initSettings = async () => { const s = await load(); await loadStatus(); return s; };
 
   Reel.toggleTheme = async function () {
     const current = document.documentElement.getAttribute("data-theme");

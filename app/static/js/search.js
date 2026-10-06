@@ -11,7 +11,7 @@ window.Reel = window.Reel || {};
   function renderCard(r) {
     return `
       <div class="result-card" data-url="${Reel.escapeHtml(r.url)}">
-        ${r.thumbnail ? `<img class="result-thumb" src="${r.thumbnail}" alt="">` : '<div class="result-thumb"></div>'}
+        ${r.thumbnail ? `<img class="result-thumb" src="${Reel.escapeHtml(r.thumbnail)}" alt="">` : '<div class="result-thumb"></div>'}
         <div class="result-body">
           <div class="result-title">${Reel.escapeHtml(r.title)}</div>
           <div class="result-sub">${Reel.escapeHtml(r.uploader || "")} ${r.duration ? "· " + Reel.formatDuration(r.duration) : ""}</div>

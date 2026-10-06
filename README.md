@@ -1,208 +1,154 @@
-# Reel — a personal media downloader
+# Reel — Personal Media Downloader
 
-A self-hosted Flask app around [yt-dlp](https://github.com/yt-dlp/yt-dlp): paste
-a link, pick a format, download. Runs entirely on your own machine.
+A local Python/Flask web app powered by yt-dlp and FFmpeg. Paste a media link, choose a format, and manage downloads in your browser. This update repairs the existing app and adds a single username/password account. It does not add new platform-specific integrations.
 
-Supports every site yt-dlp supports, including YouTube (videos, Shorts,
-playlists), Instagram (Reels/videos/posts), Facebook (videos/Reels), TikTok,
-Twitter/X, Reddit, Vimeo, Dailymotion, Twitch clips, Pinterest, and public
-Google Drive/Dropbox links.
+## Windows: update and run
 
-> **Use responsibly.** Only download media you own the rights to, or that's
-> licensed for reuse, and respect each platform's terms of service. This tool
-> doesn't bypass paywalls, DRM, or private-content restrictions — it's a
-> convenience wrapper around yt-dlp's public-URL extraction, nothing more.
+1. Extract this ZIP into a new folder. Keep your old folder as a backup. The ZIP retains the supplied history database, settings, logs and downloaded file; no login account or session secret is included.
+2. Install **Python 3.11 or newer**, **FFmpeg** (both `ffmpeg` and `ffprobe`) and either **Node.js 22+** or **Deno 2.3+**. Add the executables to PATH, then open a new terminal.
+   - Python: https://www.python.org/downloads/
+   - FFmpeg: https://ffmpeg.org/download.html
+   - Node.js: https://nodejs.org/en/download
+   - Deno: https://docs.deno.com/runtime/getting_started/installation/
+3. Open PowerShell in the extracted `MyVideoDownloader` folder:
 
----
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install --upgrade -r requirements.txt
+.\.venv\Scripts\python.exe manage.py set-user
+.\.venv\Scripts\python.exe run.py
+```
 
-## Features
+The account command asks for a username, password and password confirmation. Password input is hidden while typing. Use at least 10 characters. There is **no default password**, email requirement or registration page.
 
-- Video info preview (thumbnail, title, duration, uploader, resolutions, fps,
-  codecs, approximate file size) before you commit to a download
-- Format picker: MP4 / WEBM / MP3 / M4A / WAV / FLAC, with per-format video
-  or audio quality options
-- Playlist support: just the linked video, the entire playlist, or a
-  specific `1,3,5-8`-style selection
-- A real download **queue** with configurable concurrency, pause (for
-  queued items), cancel (for anything), and retry
-- Local **history** (SQLite) with redownload and delete
-- In-app **YouTube search** (no API key needed)
-- Subtitles, embedded thumbnails, embedded metadata, and optional
-  SponsorBlock sponsor-segment removal
-- Dashboard stats (active / queued / completed / failed / total saved)
-- Dark/light theme, drag-and-drop URL input, clipboard-paste detection,
-  toast notifications, keyboard shortcuts
-- A documented REST API (see below) so you can drive it from scripts too
+4. Open http://127.0.0.1:5000 and sign in.
+5. Open **Settings → Download engine**. Confirm FFmpeg, JavaScript runtime and EJS are available.
 
-## Requirements
+You do not need to activate the virtual environment when using the commands above. If PowerShell blocks activation scripts, these commands still work.
 
-- Python 3.11+ (3.13 recommended)
-- [ffmpeg](https://ffmpeg.org/download.html) on your system `PATH` — required
-  for merging separate video/audio streams, audio extraction, and embedding
-  thumbnails/metadata. Without it, only pre-merged formats will work.
+## Linux / macOS
 
-## Setup
+Install Python 3.11+, FFmpeg and Node.js 22+ or Deno 2.3+ using your system package manager or the official links above.
 
 ```bash
-git clone <this project>
-cd media-downloader
 python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env             # optional - defaults work out of the box
-python run.py
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install --upgrade -r requirements.txt
+.venv/bin/python manage.py set-user
+.venv/bin/python run.py
 ```
 
-Then open **http://127.0.0.1:5000**.
+## Authentication
 
-### Windows notes
+- One local account, username/password only; password stored as a Werkzeug scrypt hash in `data/auth.db`.
+- The dashboard and **all API routes**, file downloads, settings, history and updates require login.
+- Session lifetime is 12 hours; cookies use HttpOnly and SameSite=Lax. State-changing requests require a CSRF token.
+- Five login attempts per client IP per five minutes. The throttle is local to the single server process and resets on restart.
+- Sign out is available above the dashboard, including on mobile.
+- Reset or change the account by running `manage.py set-user` again. It replaces the single account and invalidates existing sessions; it keeps download history.
+- The app generates a persistent random signing key in `data/session.key` unless a `SECRET_KEY` is explicitly configured.
+- Keep `HOST=127.0.0.1` for your own computer. For access from another device, the server is still the machine that stores and processes downloads. Use HTTPS and `SESSION_COOKIE_SECURE=true` if exposing it beyond localhost. This is a personal single-user app, not a multi-tenant service.
 
-- Everything here works unmodified on Windows: paths are handled with
-  `pathlib`, filenames are sanitized for Windows' reserved characters
-  (`windowsfilenames: True` in the yt-dlp options), and the "browse for a
-  folder" button uses `tkinter`, which ships with the standard Windows
-  Python installer.
-- Install ffmpeg and make sure `ffmpeg.exe` is on your `PATH` (e.g. via
-  `winget install ffmpeg` or by downloading a build and adding its `bin`
-  folder to `PATH`).
+## What changed
 
-### Logging in to sites that require an account
+- Upgraded to the current verified stable yt-dlp baseline **2026.08.19** and its default extras, including **yt-dlp-ejs 0.8.0**. Tested with **Flask 3.1.3**.
+- Added automatic detection of supported Deno/Node runtimes for modern YouTube extraction, optional explicit executable paths, and FFmpeg checks.
+- `.env` now loads before configuration. A custom `DATA_DIR` also controls the default history/settings paths.
+- Removed the forced old browser user-agent; yt-dlp can use its maintained defaults. Optional `HTTP_USER_AGENT` still works.
+- Extractor warnings are now logged, with actionable guidance for HTTP 403 failures.
+- Updates install `yt-dlp[default]`, refuse to run with queued/active downloads, and explicitly tell you to restart. Updating installed files does not replace modules already loaded by Python.
+- Fixed queue duplication after pause/resume, worker races when clearing a running task, and changing concurrency without spawning duplicate worker indexes.
+- Tracks final output filenames after conversion. It no longer guesses the newest file in the download folder, which could serve an unrelated file.
+- Browser-delivered jobs use separate task subfolders to avoid collisions. Existing downloaded files remain unchanged.
+- Existing playlist downloads expose a Save button for each reported media output. Downloaded subtitle sidecars remain on the server.
+- Fixed stale link preview responses and improved input validation. Unsupported thumbnail embedding is omitted for WebM/WAV.
+- Kept existing tabs, format choices, search, history, queue controls, theme and settings.
 
-Some sites only serve certain content to logged-in users. yt-dlp can reuse
-cookies from a browser you're already logged into — set **one** of these in
-`.env`:
+## Existing options
 
+| Area | Options |
+|---|---|
+| Video | MP4, WebM; best, 2160p, 1440p, 1080p, 720p, 480p, 360p caps |
+| Audio | MP3, M4A, WAV, FLAC; best or 128/192/256/320 kbps where applicable |
+| Extras | English subtitles where available, supported thumbnail embedding, metadata, optional SponsorBlock |
+| Playlists | Single linked video, entire playlist, selected indexes such as `1,3,5-8` |
+| Queue | Concurrency 1–10, pause queued jobs, resume, cancel, retry, clear |
+| Files | Browser save links or an explicit absolute folder on the server machine |
+
+Resolution is a maximum cap, not a guarantee that the source contains that quality. WAV/FLAC are lossless output formats; converting a compressed source does not recover lost detail. MP4 selection prefers available MP4 video and M4A audio before a fallback conversion. This does not guarantee H.264 hardware compatibility on every player.
+
+Active downloads cannot be paused by this UI. Pause only applies to waiting jobs. Cancellation is cooperative and may wait until yt-dlp emits its next progress/postprocessing callback. A finished file can remain on disk after cancellation. Clearing queue/history does not delete downloaded files. The queue is in memory and resets when the app restarts; history and settings persist. Browser Save links are tied to the current queue; existing files remain accessible through your filesystem after restarting.
+
+## Updates and 403 troubleshooting
+
+The supplied logs contain repeated `HTTP Error 403: Forbidden` failures. Outdated extractors and missing current YouTube runtime dependencies are plausible contributors; the logs alone do not establish one universal cause.
+
+1. Check **Settings → Download engine**.
+2. Finish or clear the queue, click **Update yt-dlp**, stop the server with Ctrl+C and start it again.
+3. To update manually on Windows:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade "yt-dlp[default]"
 ```
-COOKIES_FROM_BROWSER=chrome
-# or
-COOKIES_FILE=/path/to/cookies.txt
+
+4. If stable still fails, upstream recommends trying the nightly build. Stop the app first:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade --pre "yt-dlp[default]"
 ```
 
-## Project structure
+Set `YTDLP_CHANNEL=nightly` in `.env` if you want the in-app button to request nightlies subsequently.
 
-```
+5. Some links require a login or are unavailable in your region/session. For content your account may access, configure **one** of `COOKIES_FROM_BROWSER` or `COOKIES_FILE`. Cookie extraction varies by browser/OS. Cookies are sensitive; do not include them in source control or share them.
+6. Inspect `logs/app.log`. Updating cannot guarantee every link, bypass platform restrictions or resolve all network/IP/token requirements. Do not disable TLS certificate verification to work around a certificate error.
+
+Upstream documentation:
+- https://github.com/yt-dlp/yt-dlp/releases/latest
+- https://github.com/yt-dlp/yt-dlp/wiki/EJS
+- https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
+
+## Configuration and storage
+
+Copy `.env.example` to `.env` if you want custom paths/options. Restart after changes. Environment variables take precedence over `.env` values. Relative custom paths resolve from the server's working directory; absolute paths are recommended.
+
+```text
 app/
-    config.py            Env-driven configuration
-    factory.py            Flask application factory
-    extensions.py          Process-wide service singletons
-    models/
-        schemas.py          DownloadRequest / QueueItem dataclasses
-    services/
-        downloader.py        yt-dlp wrapper: info + download execution
-        queue_manager.py       Thread-pool queue: pause/resume/cancel/retry
-        history.py              SQLite download history
-        search.py                 YouTube search via yt-dlp
-        settings_store.py          Persisted user preferences (JSON)
-    routes/
-        pages.py               Serves the single-page UI
-        api.py                    All /api/* REST endpoints
-    utils/
-        validators.py            URL / filename / path-traversal guards
-        logger.py                  Rotating file + console logging
-    templates/index.html        Single-page app shell
-    static/
-        css/style.css             Design system + components
-        js/                         utils, downloads, history, search, settings, app
-run.py                          Entry point
-requirements.txt
-.env.example
+  config.py                 Environment configuration
+  factory.py                Flask app and security setup
+  routes/auth.py            Sign-in and sign-out
+  routes/api.py             Download, queue, history, settings, diagnostics
+  services/auth.py          Hashed account storage, sessions, CSRF, throttle
+  services/downloader.py    yt-dlp options, progress and final file handling
+  services/diagnostics.py   FFmpeg, runtime and package checks
+  services/queue_manager.py Background download workers
+  services/history.py      SQLite download history
+  services/settings_store.py JSON preferences
+  templates/               Dashboard and sign-in page
+  static/                  CSS and JavaScript
+manage.py                  Create/reset your single account
+run.py                     Start the local app
+serve.py                   Optional Waitress server (one process)
+tests/                     Authentication and download regression tests
 ```
 
-## REST API
+Data stays on the host running Python. Metadata/media requests go to the relevant platforms; thumbnails and the dashboard's Google Fonts are fetched by the browser. SponsorBlock sends requests to its service only when enabled.
 
-All endpoints are under `/api`.
+## Optional Waitress server
 
-| Method | Path                        | Purpose                                 |
-|--------|------------------------------|-------------------------------------------|
-| GET    | `/info?url=&playlist_mode=` | Video/playlist metadata preview           |
-| GET    | `/formats`                  | Supported containers/qualities            |
-| POST   | `/download`                 | Add a download to the queue               |
-| GET    | `/progress/<task_id>`       | Server-Sent Events progress stream        |
-| GET    | `/queue`                    | All queue items + dashboard stats         |
-| GET    | `/stats`                    | Dashboard stats only                      |
-| POST   | `/queue/<task_id>/pause`    | Pause a **queued** item                   |
-| POST   | `/queue/<task_id>/resume`   | Resume a paused item                      |
-| POST   | `/queue/<task_id>/cancel`   | Cancel a queued **or active** item        |
-| POST   | `/queue/<task_id>/retry`    | Re-queue a failed/canceled item           |
-| POST   | `/queue/clear-completed`    | Remove finished/failed/canceled items     |
-| POST   | `/queue/clear`              | Cancel + remove everything                |
-| GET    | `/download-file/<task_id>`  | Download a finished browser-mode file     |
-| GET    | `/history`                  | Download history                          |
-| DELETE | `/history/<id>`             | Delete one history entry                  |
-| DELETE | `/history`                  | Clear all history                         |
-| POST   | `/history/<id>/redownload`  | Re-queue a past download                  |
-| GET    | `/search?q=`                | Search YouTube                            |
-| POST   | `/browse-directory`         | Native folder picker (desktop use only)   |
-| GET/POST | `/settings`                | Read/update persisted preferences       |
-| POST   | `/update-ytdlp`             | `pip install --upgrade yt-dlp`            |
-
-`POST /download` body:
-
-```json
-{
-  "url": "https://youtube.com/watch?v=...",
-  "container": "mp4",
-  "video_quality": "1080p",
-  "audio_only": false,
-  "audio_quality": "best",
-  "playlist_mode": "single",
-  "playlist_items": "",
-  "download_subtitles": false,
-  "embed_thumbnail": false,
-  "embed_metadata": true,
-  "sponsorblock": false,
-  "save_path": ""
-}
+```powershell
+.\.venv\Scripts\python.exe serve.py
 ```
 
-Leave `save_path` blank to have the file served back through your browser;
-set it to an absolute, writable, existing folder to have the server save it
-there directly instead.
+This reads HOST/PORT from the same configuration and uses a single process. Do not start multiple server processes against this app: each would have its own in-memory queue.
 
-## Known limitations (by design)
+## Verification
 
-- **Pausing an active download isn't supported.** yt-dlp has no supported
-  way to pause and resume a partially-downloaded stream. "Pause" only
-  applies to items still sitting in the queue, before they've started —
-  once a download is running, you can cancel it, not pause it.
-- **Clipboard "monitoring"** checks the clipboard when the browser tab
-  regains focus (with your permission), not continuously in the
-  background — browsers don't allow background clipboard polling for
-  privacy reasons.
-- **Playlist progress** reflects the current item within the playlist, not
-  overall playlist completion, since yt-dlp downloads a playlist as one
-  continuous operation.
-- **The folder-picker button** opens a native OS dialog *on the machine
-  running the Flask process*. That's your own desktop for local use, but
-  will fail gracefully (with a message asking you to type the path) on a
-  headless server.
-- **Concurrency limits are per-process.** Run with a single worker process
-  (see below) — multiple worker processes would each keep their own,
-  disconnected queue and history cache.
-
-## Running in production
-
-This is built for personal/local use, but if you expose it beyond
-`127.0.0.1`:
-
-```bash
-gunicorn -w 1 -b 0.0.0.0:5000 "run:app"             # Linux/macOS
-waitress-serve --host=0.0.0.0 --port=5000 run:app   # Windows
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Use exactly **one** worker process — the queue, history, and settings
-singletons live in that process's memory. Put it behind a reverse proxy
-(nginx/Caddy) with HTTPS if it's reachable outside your own machine, and set
-`SECRET_KEY` and `ALLOWED_ORIGINS` in `.env`.
+Tests use synthetic one-second video/audio and a local HTTP server for actual yt-dlp/FFmpeg download/conversion. No third-party credentials or media are needed. See `VALIDATION.md` for the verification performed on this delivery.
 
-## Code style
-
-```bash
-black .
-ruff check .
-```
-
-## License
-
-For personal use. yt-dlp is licensed separately under the Unlicense — see
-their repository for details.
+Use this tool for media you have permission to download, within the relevant platform's rules.
