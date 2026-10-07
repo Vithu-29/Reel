@@ -250,24 +250,12 @@ class QueueManager:
         try:
             save_dir = validate_save_directory(target_dir)
         except Exception as exc:
-            if not server_mode and target_dir != Config.DEFAULT_DOWNLOAD_FOLDER:
-                # The configured default folder went missing/unwritable
-                # (e.g. an unplugged drive) - fall back rather than losing
-                # the download entirely, but tell the user what happened.
-                log.warning(
-                    "Configured default download folder %r is unusable (%s); falling back to %s",
-                    target_dir,
-                    exc,
-                    Config.DEFAULT_DOWNLOAD_FOLDER,
-                )
-                save_dir = Config.DEFAULT_DOWNLOAD_FOLDER
-            else:
-                self._finish_with_error(task_id, downloader.friendly_error(exc))
-                return
-
-        if not server_mode:
-            save_dir = os.path.join(save_dir, task_id)
-            os.makedirs(save_dir, exist_ok=True)
+            self._finish_with_error(
+                task_id,
+                f"Cannot save to {target_dir}: {downloader.friendly_error(exc)} "
+                "Check the download folder in Settings or the per-download folder override.",
+            )
+            return
 
         def on_progress(evt: downloader.ProgressEvent) -> None:
             with self._lock:
@@ -311,8 +299,8 @@ class QueueManager:
                 url=req.url,
                 resolution=req.video_quality,
                 container=req.container,
-                status="finished" if server_mode else "ready for browser",
-                filepath=filepath if server_mode else None,
+                status="finished",
+                filepath=filepath,
             )
         except downloader.DownloadCanceled:
             with self._lock:

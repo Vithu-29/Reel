@@ -302,7 +302,7 @@ window.Reel = window.Reel || {};
     } else if (s === "error" && item.error) {
       subBits.push(item.error.slice(0, 140));
     } else if (s === "finished") {
-      subBits.push(item.options.save_path ? `Saved to ${item.options.save_path}` : "Ready to download");
+      subBits.push(item.filepath ? `Saved to ${item.filepath}` : "Saved");
     } else {
       subBits.push(item.options.container.toUpperCase(), item.options.video_format_id ? `Source #${item.options.video_format_id}` : item.options.video_quality);
     }
@@ -314,7 +314,7 @@ window.Reel = window.Reel || {};
     if (["error", "canceled"].includes(s)) actions.push(btn(item.task_id, "retry", "Retry"));
     if (s === "finished" && !item.options.save_path) {
       const files = item.files?.length ? item.files : [item.filepath];
-      files.forEach((_, index) => actions.push(`<a class="btn btn-ghost btn-sm" href="/api/download-file/${item.task_id}?index=${index}">Save ${files.length > 1 ? "file " + (index + 1) : "file"}</a>`));
+      files.forEach((_, index) => actions.push(`<a class="btn btn-ghost btn-sm" title="Save another copy using your browser's download location" href="/api/download-file/${item.task_id}?index=${index}">Save a copy${files.length > 1 ? " (" + (index + 1) + ")" : ""}</a>`));
     }
 
     return `

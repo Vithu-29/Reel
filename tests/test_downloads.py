@@ -2,6 +2,7 @@ import functools
 import http.server
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,7 @@ def test_real_download_and_conversion(local_media, container, tmp_path):
     info = downloader.run_download(req, str(tmp_path), lambda evt: None, lambda: False)
     path = Path(downloader.resolve_final_filepath(info, req, str(tmp_path)))
     assert path.suffix == "." + container
+    assert path.parent == tmp_path
     assert path.stat().st_size > 0
     assert len(info["_output_files"]) == 1
 
@@ -125,3 +127,88 @@ def test_real_download_of_preview_selected_format(local_media, tmp_path):
     path = Path(downloader.resolve_final_filepath(info, req, str(tmp_path)))
     assert path.suffix == ".mp4"
     assert path.stat().st_size > 0
+
+
+@pytest.mark.parametrize("use_override", [False, True])
+def test_saved_folder_used_directly_for_concurrent_downloads(
+    app, client, monkeypatch, tmp_path, local_media, use_override
+):
+    from conftest import sign_in
+
+    from app import extensions
+    from app.config import Config
+    from app.services.settings_store import SettingsStore
+
+    chosen = tmp_path / "My videos 100% café"
+    chosen.mkdir()
+    headers = sign_in(app, client)
+    response = client.post(
+        "/api/settings", json={"download_folder": str(chosen)}, headers=headers
+    )
+    assert response.status_code == 200
+    manager = extensions.queue_manager
+    # Reload from disk so this also checks that the saved setting survives restart.
+    manager._settings = SettingsStore(Config.SETTINGS_PATH)
+    monkeypatch.setattr(manager._pending, "put", lambda tid: None)
+    destination = chosen
+    if use_override:
+        destination = tmp_path / "override"
+        destination.mkdir()
+    existing = destination / "sample [sample].mp4"
+    existing.write_bytes(b"existing download")
+    ids = [
+        manager.add(DownloadRequest(
+            url=local_media, save_path=str(destination) if use_override else ""
+        ))
+        for _ in range(2)
+    ]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(manager._run_task, ids))
+    paths = []
+    for tid in ids:
+        item = manager.get(tid)
+        assert item["status"] == "finished", item.get("error")
+        path = Path(item["filepath"])
+        assert path.parent == destination
+        assert path.stat().st_size > 0
+        paths.append(str(path))
+        copy = client.get(f"/api/download-file/{tid}")
+        assert copy.status_code == 200
+        assert copy.data == path.read_bytes()
+        copy.close()
+    assert len(set(paths)) == 2
+    assert existing.read_bytes() == b"existing download"
+    assert all(path.is_file() for path in destination.iterdir())
+    assert not list(Path(Config.DEFAULT_DOWNLOAD_FOLDER).iterdir())
+    if use_override:
+        assert not list(chosen.iterdir())
+    history = extensions.history.get_all()
+    assert {entry["filepath"] for entry in history} == set(paths)
+    assert all(entry["status"] == "finished" for entry in history)
+
+
+@pytest.mark.parametrize("unavailable", ["missing", "unwritable"])
+def test_unavailable_settings_folder_never_falls_back(app, monkeypatch, tmp_path, unavailable):
+    from app import extensions
+    from app.config import Config
+    from app.utils import validators
+
+    chosen = tmp_path / "unavailable"
+    if unavailable == "unwritable":
+        chosen.mkdir()
+        monkeypatch.setattr(validators.os, "access", lambda *args: False)
+    extensions.settings_store.update({"download_folder": str(chosen)})
+    manager = extensions.queue_manager
+    monkeypatch.setattr(manager._pending, "put", lambda tid: None)
+
+    def unexpected_download(*args):
+        pytest.fail("Downloader must not run when the chosen folder is unavailable")
+
+    monkeypatch.setattr(downloader, "run_download", unexpected_download)
+    tid = manager.add(DownloadRequest(url="https://example.com/video"))
+    manager._run_task(tid)
+    item = manager.get(tid)
+    assert item["status"] == "error"
+    assert str(chosen) in item["error"]
+    assert "Settings" in item["error"]
+    assert not list(Path(Config.DEFAULT_DOWNLOAD_FOLDER).iterdir())

@@ -8,7 +8,7 @@ window.Reel = window.Reel || {};
   const clearBtn = document.getElementById("clearHistoryBtn");
 
   function renderRow(entry) {
-    const ok = entry.status === "finished" || entry.status === "downloaded (browser)";
+    const ok = ["finished", "downloaded (browser)", "ready for browser"].includes(entry.status);
     return `
       <div class="item-card" data-id="${entry.id}">
         <div class="item-top">
@@ -20,6 +20,7 @@ window.Reel = window.Reel || {};
               <span>${Reel.escapeHtml(entry.container || "")}</span>
               <span>${Reel.escapeHtml(entry.resolution || "")}</span>
               <span>${Reel.formatDate(entry.downloaded_at)}</span>
+              ${entry.filepath ? `<span>${Reel.escapeHtml(entry.filepath)}</span>` : ""}
             </div>
           </div>
           <div class="item-actions">

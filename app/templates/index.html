@@ -142,7 +142,7 @@
           <div class="option">
             <label for="savePathInput">Server save folder (optional)</label>
             <div class="input-with-button">
-              <input type="text" id="savePathInput" placeholder="Leave blank to save via your browser">
+              <input type="text" id="savePathInput" placeholder="Leave blank to use the folder in Settings">
               <button class="btn btn-ghost" id="browseBtn" type="button" title="Browse for a folder">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
               </button>
@@ -220,6 +220,7 @@
         <div class="options-grid">
           <div class="option">
             <label for="settingFolder">Default download folder</label>
+            <p class="hint">Files are saved directly here on the computer running this app. A per-download folder overrides this setting.</p>
             <div class="input-with-button">
               <input type="text" id="settingFolder">
               <button class="btn btn-ghost" id="settingBrowseBtn" type="button">

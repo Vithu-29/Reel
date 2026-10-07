@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
+from uuid import uuid4
 
 import yt_dlp
 from yt_dlp.utils import DownloadCancelled, DownloadError
@@ -212,7 +213,11 @@ def build_ydl_opts(
     opts.update(
         {
             "format": _format_selector(req),
-            "outtmpl": f"{save_dir.rstrip('/')}/%(title).200B [%(id)s].%(ext)s",
+            # Keep the chosen directory literal (including '%' characters).
+            # A per-run suffix isolates simultaneous downloads and conversions
+            # without adding a task subfolder or overwriting earlier downloads.
+            "paths": {"home": save_dir},
+            "outtmpl": f"%(title).200B [%(id)s] - {uuid4().hex[:12]}.%(ext)s",
             "restrictfilenames": False,
             "windowsfilenames": True,  # keep filenames valid on Windows too
             "noplaylist": noplaylist,
