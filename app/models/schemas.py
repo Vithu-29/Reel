@@ -45,7 +45,7 @@ class DownloadRequest:
     embed_thumbnail: bool = False
     embed_metadata: bool = True
     sponsorblock: bool = False
-    save_path: str = ""  # blank -> server default folder, browser-delivered
+    save_path: str = ""  # blank -> download folder configured in Settings
 
     def to_dict(self) -> dict:
         return asdict(self)

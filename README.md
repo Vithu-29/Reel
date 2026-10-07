@@ -60,7 +60,7 @@ python3 -m venv .venv
 - Updates install `yt-dlp[default]`, refuse to run with queued/active downloads, and explicitly tell you to restart. Updating installed files does not replace modules already loaded by Python.
 - Fixed queue duplication after pause/resume, worker races when clearing a running task, and changing concurrency without spawning duplicate worker indexes.
 - Tracks final output filenames after conversion. It no longer guesses the newest file in the download folder, which could serve an unrelated file.
-- Browser-delivered jobs use separate task subfolders to avoid collisions. Existing downloaded files remain unchanged.
+- Downloads go directly into the folder chosen in Settings, unless a per-download folder overrides it. Filenames include a unique suffix so simultaneous downloads and different qualities do not overwrite each other. Existing downloaded files remain unchanged.
 - Existing playlist downloads expose a Save button for each reported media output. Downloaded subtitle sidecars remain on the server.
 - Fixed stale link preview responses and improved input validation. Unsupported thumbnail embedding is omitted for WebM/WAV.
 - Kept existing tabs, format choices, search, history, queue controls, theme and settings.
@@ -74,7 +74,7 @@ python3 -m venv .venv
 | Extras | English subtitles where available, supported thumbnail embedding, metadata, optional SponsorBlock |
 | Playlists | Single linked video, entire playlist, selected indexes such as `1,3,5-8` |
 | Queue | Concurrency 1–10, pause queued jobs, resume, cancel, retry, clear |
-| Files | Browser save links or an explicit absolute folder on the server machine |
+| Files | Settings download folder or per-download override on the server machine; optional browser copy |
 
 Resolution is a maximum cap, not a guarantee that the source contains that quality. WAV/FLAC are lossless output formats; converting a compressed source does not recover lost detail. MP4 selection prefers available MP4 video and M4A audio before a fallback conversion. This does not guarantee H.264 hardware compatibility on every player.
 
@@ -109,6 +109,10 @@ Upstream documentation:
 - https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
 
 ## Configuration and storage
+
+**Download location:** Set an existing, writable absolute folder in Settings and click **Save settings**. Leave the optional server save folder on the Download tab blank to use it. New jobs save directly into that folder; completed jobs and History show their saved paths. If the folder becomes unavailable, the job fails with an explanation instead of silently switching folders. Files from earlier downloads are not moved.
+
+**Save a copy** is optional: the file has already been saved by the app. This link downloads an additional copy through your browser, whose own download settings determine where that copy goes. When the app runs on another computer, the Settings folder belongs to that computer.
 
 Copy `.env.example` to `.env` if you want custom paths/options. Restart after changes. Environment variables take precedence over `.env` values. Relative custom paths resolve from the server's working directory; absolute paths are recommended.
 

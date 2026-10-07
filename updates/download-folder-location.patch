@@ -1,0 +1,286 @@
+--- a/app/services/queue_manager.py
++++ b/app/services/queue_manager.py
+@@ -250,24 +250,12 @@
+         try:
+             save_dir = validate_save_directory(target_dir)
+         except Exception as exc:
+-            if not server_mode and target_dir != Config.DEFAULT_DOWNLOAD_FOLDER:
+-                # The configured default folder went missing/unwritable
+-                # (e.g. an unplugged drive) - fall back rather than losing
+-                # the download entirely, but tell the user what happened.
+-                log.warning(
+-                    "Configured default download folder %r is unusable (%s); falling back to %s",
+-                    target_dir,
+-                    exc,
+-                    Config.DEFAULT_DOWNLOAD_FOLDER,
+-                )
+-                save_dir = Config.DEFAULT_DOWNLOAD_FOLDER
+-            else:
+-                self._finish_with_error(task_id, downloader.friendly_error(exc))
+-                return
+-
+-        if not server_mode:
+-            save_dir = os.path.join(save_dir, task_id)
+-            os.makedirs(save_dir, exist_ok=True)
++            self._finish_with_error(
++                task_id,
++                f"Cannot save to {target_dir}: {downloader.friendly_error(exc)} "
++                "Check the download folder in Settings or the per-download folder override.",
++            )
++            return
+ 
+         def on_progress(evt: downloader.ProgressEvent) -> None:
+             with self._lock:
+@@ -311,8 +299,8 @@
+                 url=req.url,
+                 resolution=req.video_quality,
+                 container=req.container,
+-                status="finished" if server_mode else "ready for browser",
+-                filepath=filepath if server_mode else None,
++                status="finished",
++                filepath=filepath,
+             )
+         except downloader.DownloadCanceled:
+             with self._lock:
+--- a/app/services/downloader.py
++++ b/app/services/downloader.py
+@@ -16,6 +16,7 @@
+ from dataclasses import dataclass
+ from pathlib import Path
+ from typing import Any, Callable, Optional
++from uuid import uuid4
+ 
+ import yt_dlp
+ from yt_dlp.utils import DownloadCancelled, DownloadError
+@@ -212,7 +213,11 @@
+     opts.update(
+         {
+             "format": _format_selector(req),
+-            "outtmpl": f"{save_dir.rstrip('/')}/%(title).200B [%(id)s].%(ext)s",
++            # Keep the chosen directory literal (including '%' characters).
++            # A per-run suffix isolates simultaneous downloads and conversions
++            # without adding a task subfolder or overwriting earlier downloads.
++            "paths": {"home": save_dir},
++            "outtmpl": f"%(title).200B [%(id)s] - {uuid4().hex[:12]}.%(ext)s",
+             "restrictfilenames": False,
+             "windowsfilenames": True,  # keep filenames valid on Windows too
+             "noplaylist": noplaylist,
+--- a/app/models/schemas.py
++++ b/app/models/schemas.py
+@@ -45,7 +45,7 @@
+     embed_thumbnail: bool = False
+     embed_metadata: bool = True
+     sponsorblock: bool = False
+-    save_path: str = ""  # blank -> server default folder, browser-delivered
++    save_path: str = ""  # blank -> download folder configured in Settings
+ 
+     def to_dict(self) -> dict:
+         return asdict(self)
+--- a/app/static/js/downloads.js
++++ b/app/static/js/downloads.js
+@@ -302,7 +302,7 @@
+     } else if (s === "error" && item.error) {
+       subBits.push(item.error.slice(0, 140));
+     } else if (s === "finished") {
+-      subBits.push(item.options.save_path ? `Saved to ${item.options.save_path}` : "Ready to download");
++      subBits.push(item.filepath ? `Saved to ${item.filepath}` : "Saved");
+     } else {
+       subBits.push(item.options.container.toUpperCase(), item.options.video_format_id ? `Source #${item.options.video_format_id}` : item.options.video_quality);
+     }
+@@ -314,7 +314,7 @@
+     if (["error", "canceled"].includes(s)) actions.push(btn(item.task_id, "retry", "Retry"));
+     if (s === "finished" && !item.options.save_path) {
+       const files = item.files?.length ? item.files : [item.filepath];
+-      files.forEach((_, index) => actions.push(`<a class="btn btn-ghost btn-sm" href="/api/download-file/${item.task_id}?index=${index}">Save ${files.length > 1 ? "file " + (index + 1) : "file"}</a>`));
++      files.forEach((_, index) => actions.push(`<a class="btn btn-ghost btn-sm" title="Save another copy using your browser's download location" href="/api/download-file/${item.task_id}?index=${index}">Save a copy${files.length > 1 ? " (" + (index + 1) + ")" : ""}</a>`));
+     }
+ 
+     return `
+--- a/app/static/js/history.js
++++ b/app/static/js/history.js
+@@ -8,7 +8,7 @@
+   const clearBtn = document.getElementById("clearHistoryBtn");
+ 
+   function renderRow(entry) {
+-    const ok = entry.status === "finished" || entry.status === "downloaded (browser)";
++    const ok = ["finished", "downloaded (browser)", "ready for browser"].includes(entry.status);
+     return `
+       <div class="item-card" data-id="${entry.id}">
+         <div class="item-top">
+@@ -20,6 +20,7 @@
+               <span>${Reel.escapeHtml(entry.container || "")}</span>
+               <span>${Reel.escapeHtml(entry.resolution || "")}</span>
+               <span>${Reel.formatDate(entry.downloaded_at)}</span>
++              ${entry.filepath ? `<span>${Reel.escapeHtml(entry.filepath)}</span>` : ""}
+             </div>
+           </div>
+           <div class="item-actions">
+--- a/app/templates/index.html
++++ b/app/templates/index.html
+@@ -142,7 +142,7 @@
+           <div class="option">
+             <label for="savePathInput">Server save folder (optional)</label>
+             <div class="input-with-button">
+-              <input type="text" id="savePathInput" placeholder="Leave blank to save via your browser">
++              <input type="text" id="savePathInput" placeholder="Leave blank to use the folder in Settings">
+               <button class="btn btn-ghost" id="browseBtn" type="button" title="Browse for a folder">
+                 <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+               </button>
+@@ -220,6 +220,7 @@
+         <div class="options-grid">
+           <div class="option">
+             <label for="settingFolder">Default download folder</label>
++            <p class="hint">Files are saved directly here on the computer running this app. A per-download folder overrides this setting.</p>
+             <div class="input-with-button">
+               <input type="text" id="settingFolder">
+               <button class="btn btn-ghost" id="settingBrowseBtn" type="button">
+--- a/README.md
++++ b/README.md
+@@ -60,7 +60,7 @@
+ - Updates install `yt-dlp[default]`, refuse to run with queued/active downloads, and explicitly tell you to restart. Updating installed files does not replace modules already loaded by Python.
+ - Fixed queue duplication after pause/resume, worker races when clearing a running task, and changing concurrency without spawning duplicate worker indexes.
+ - Tracks final output filenames after conversion. It no longer guesses the newest file in the download folder, which could serve an unrelated file.
+-- Browser-delivered jobs use separate task subfolders to avoid collisions. Existing downloaded files remain unchanged.
++- Downloads go directly into the folder chosen in Settings, unless a per-download folder overrides it. Filenames include a unique suffix so simultaneous downloads and different qualities do not overwrite each other. Existing downloaded files remain unchanged.
+ - Existing playlist downloads expose a Save button for each reported media output. Downloaded subtitle sidecars remain on the server.
+ - Fixed stale link preview responses and improved input validation. Unsupported thumbnail embedding is omitted for WebM/WAV.
+ - Kept existing tabs, format choices, search, history, queue controls, theme and settings.
+@@ -74,7 +74,7 @@
+ | Extras | English subtitles where available, supported thumbnail embedding, metadata, optional SponsorBlock |
+ | Playlists | Single linked video, entire playlist, selected indexes such as `1,3,5-8` |
+ | Queue | Concurrency 1–10, pause queued jobs, resume, cancel, retry, clear |
+-| Files | Browser save links or an explicit absolute folder on the server machine |
++| Files | Settings download folder or per-download override on the server machine; optional browser copy |
+ 
+ Resolution is a maximum cap, not a guarantee that the source contains that quality. WAV/FLAC are lossless output formats; converting a compressed source does not recover lost detail. MP4 selection prefers available MP4 video and M4A audio before a fallback conversion. This does not guarantee H.264 hardware compatibility on every player.
+ 
+@@ -109,6 +109,10 @@
+ - https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
+ 
+ ## Configuration and storage
++
++**Download location:** Set an existing, writable absolute folder in Settings and click **Save settings**. Leave the optional server save folder on the Download tab blank to use it. New jobs save directly into that folder; completed jobs and History show their saved paths. If the folder becomes unavailable, the job fails with an explanation instead of silently switching folders. Files from earlier downloads are not moved.
++
++**Save a copy** is optional: the file has already been saved by the app. This link downloads an additional copy through your browser, whose own download settings determine where that copy goes. When the app runs on another computer, the Settings folder belongs to that computer.
+ 
+ Copy `.env.example` to `.env` if you want custom paths/options. Restart after changes. Environment variables take precedence over `.env` values. Relative custom paths resolve from the server's working directory; absolute paths are recommended.
+ 
+--- a/VALIDATION.md
++++ b/VALIDATION.md
+@@ -34,3 +34,9 @@
+ The latest full Python test suite passed **51 tests**, including all previous login-session regressions. Added checks cover public format metadata, missing/estimated sizes, live streams, DRM/audio exclusion, exact source/FPS selection, compatible audio merging, a cross-container intermediate, rejection of stale source IDs, literal handling of IDs, request validation and preservation of the chosen ID in the queue. A synthetic local HTTP media file was inspected and downloaded using the exact format ID returned by the preview. The installed yt-dlp also processed a synthetic split-video/audio selection without downloading from a third-party site.
+ 
+ DOM interaction checks ran the actual dashboard JavaScript in Happy DOM: option labels, exact format submission, audio-only switching, stale selection clearing on URL changes, and playlist caps passed. These are simulated DOM checks, not a full browser rendering test. Ruff and JavaScript syntax checks passed. Live platform availability remains unverified in this environment; the user reported that downloads worked locally before this feature update.
++
++## Download-folder fix — 6 October 2026
++
++The full Python suite passed **55 tests**. New integration checks saved a folder through the authenticated Settings API, reloaded it from disk, and downloaded the same synthetic local HTTP video concurrently twice. Both files landed directly in the selected folder with different names; an existing file was preserved. The same checks passed with a per-download override. Folder names containing spaces, Unicode and a literal percent sign worked. Browser copy responses matched the completed files, and History recorded the actual paths. Missing and unwritable folders failed without downloading to the default folder. All six existing real FFmpeg conversion tests also verified the output's immediate parent folder.
++
++Happy DOM checks passed for the displayed saved paths, escaped filenames, numbered “Save a copy” links and current/legacy history statuses. Ruff and JavaScript syntax checks passed. The update patch was applied to the previous ZIP's source and its result compared byte-for-byte with this version. Windows and full browser rendering remain unverified here.
+--- a/tests/test_downloads.py
++++ b/tests/test_downloads.py
+@@ -2,6 +2,7 @@
+ import http.server
+ import subprocess
+ import threading
++from concurrent.futures import ThreadPoolExecutor
+ from pathlib import Path
+ 
+ import pytest
+@@ -112,6 +113,7 @@
+     info = downloader.run_download(req, str(tmp_path), lambda evt: None, lambda: False)
+     path = Path(downloader.resolve_final_filepath(info, req, str(tmp_path)))
+     assert path.suffix == "." + container
++    assert path.parent == tmp_path
+     assert path.stat().st_size > 0
+     assert len(info["_output_files"]) == 1
+ 
+@@ -125,3 +127,88 @@
+     path = Path(downloader.resolve_final_filepath(info, req, str(tmp_path)))
+     assert path.suffix == ".mp4"
+     assert path.stat().st_size > 0
++
++
++@pytest.mark.parametrize("use_override", [False, True])
++def test_saved_folder_used_directly_for_concurrent_downloads(
++    app, client, monkeypatch, tmp_path, local_media, use_override
++):
++    from conftest import sign_in
++
++    from app import extensions
++    from app.config import Config
++    from app.services.settings_store import SettingsStore
++
++    chosen = tmp_path / "My videos 100% café"
++    chosen.mkdir()
++    headers = sign_in(app, client)
++    response = client.post(
++        "/api/settings", json={"download_folder": str(chosen)}, headers=headers
++    )
++    assert response.status_code == 200
++    manager = extensions.queue_manager
++    # Reload from disk so this also checks that the saved setting survives restart.
++    manager._settings = SettingsStore(Config.SETTINGS_PATH)
++    monkeypatch.setattr(manager._pending, "put", lambda tid: None)
++    destination = chosen
++    if use_override:
++        destination = tmp_path / "override"
++        destination.mkdir()
++    existing = destination / "sample [sample].mp4"
++    existing.write_bytes(b"existing download")
++    ids = [
++        manager.add(DownloadRequest(
++            url=local_media, save_path=str(destination) if use_override else ""
++        ))
++        for _ in range(2)
++    ]
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        list(pool.map(manager._run_task, ids))
++    paths = []
++    for tid in ids:
++        item = manager.get(tid)
++        assert item["status"] == "finished", item.get("error")
++        path = Path(item["filepath"])
++        assert path.parent == destination
++        assert path.stat().st_size > 0
++        paths.append(str(path))
++        copy = client.get(f"/api/download-file/{tid}")
++        assert copy.status_code == 200
++        assert copy.data == path.read_bytes()
++        copy.close()
++    assert len(set(paths)) == 2
++    assert existing.read_bytes() == b"existing download"
++    assert all(path.is_file() for path in destination.iterdir())
++    assert not list(Path(Config.DEFAULT_DOWNLOAD_FOLDER).iterdir())
++    if use_override:
++        assert not list(chosen.iterdir())
++    history = extensions.history.get_all()
++    assert {entry["filepath"] for entry in history} == set(paths)
++    assert all(entry["status"] == "finished" for entry in history)
++
++
++@pytest.mark.parametrize("unavailable", ["missing", "unwritable"])
++def test_unavailable_settings_folder_never_falls_back(app, monkeypatch, tmp_path, unavailable):
++    from app import extensions
++    from app.config import Config
++    from app.utils import validators
++
++    chosen = tmp_path / "unavailable"
++    if unavailable == "unwritable":
++        chosen.mkdir()
++        monkeypatch.setattr(validators.os, "access", lambda *args: False)
++    extensions.settings_store.update({"download_folder": str(chosen)})
++    manager = extensions.queue_manager
++    monkeypatch.setattr(manager._pending, "put", lambda tid: None)
++
++    def unexpected_download(*args):
++        pytest.fail("Downloader must not run when the chosen folder is unavailable")
++
++    monkeypatch.setattr(downloader, "run_download", unexpected_download)
++    tid = manager.add(DownloadRequest(url="https://example.com/video"))
++    manager._run_task(tid)
++    item = manager.get(tid)
++    assert item["status"] == "error"
++    assert str(chosen) in item["error"]
++    assert "Settings" in item["error"]
++    assert not list(Path(Config.DEFAULT_DOWNLOAD_FOLDER).iterdir())
