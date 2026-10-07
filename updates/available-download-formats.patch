@@ -1,0 +1,564 @@
+--- /dev/null
++++ b/app/services/media_formats.py
+@@ -0,0 +1,115 @@
++"""Public format metadata and literal selection of a source video stream."""
++
++from math import isfinite
++
++from yt_dlp.utils import DownloadError
++
++_VIDEO_EXTENSIONS = {"mp4", "webm", "mkv", "mov", "flv", "avi", "3gp", "ts", "m4v"}
++
++
++def _number(value):
++    return (
++        value
++        if isinstance(value, (int, float))
++        and not isinstance(value, bool)
++        and isfinite(value)
++        and value > 0
++        else None
++    )
++
++
++def _is_video(fmt):
++    codec = fmt.get("vcodec")
++    return (
++        not fmt.get("has_drm")
++        and bool(fmt.get("url"))
++        and (
++            codec not in (None, "none", "images")
++            or (codec is None and fmt.get("ext") in _VIDEO_EXTENSIONS)
++        )
++    )
++
++
++def video_options(info):
++    """Expose no media URLs, headers or cookies. Sizes refer to the source stream."""
++    options = []
++    seen = set()
++    for fmt in info.get("formats") or []:
++        identity = str(fmt.get("format_id", ""))
++        if not identity or identity in seen or not _is_video(fmt):
++            continue
++        seen.add(identity)
++        size = _number(fmt.get("filesize"))
++        estimated = False
++        if size is None:
++            size = _number(fmt.get("filesize_approx"))
++            estimated = size is not None
++        if size is None and not info.get("is_live"):
++            bitrate = _number(fmt.get("tbr"))
++            duration = _number(info.get("duration"))
++            if bitrate and duration:
++                size, estimated = bitrate * 1000 * duration / 8, True
++        options.append(
++            {
++                "format_id": identity,
++                "height": _number(fmt.get("height")),
++                "width": _number(fmt.get("width")),
++                "fps": _number(fmt.get("fps")),
++                "ext": fmt.get("ext"),
++                "vcodec": fmt.get("vcodec"),
++                "dynamic_range": fmt.get("dynamic_range"),
++                "source_bytes": round(size) if size is not None else None,
++                "size_estimated": estimated,
++                "has_audio": fmt.get("acodec") not in (None, "none"),
++            }
++        )
++    return sorted(
++        options,
++        key=lambda f: (f["height"] or 0, f["fps"] or 0, f["source_bytes"] or 0),
++        reverse=True,
++    )
++
++
++def select_video_format(format_id):
++    """Treat an ID as literal data, never as a yt-dlp selector expression."""
++
++    def select(context):
++        formats = context.get("formats") or []  # yt-dlp orders worst to best
++        chosen = next(
++            (f for f in formats if str(f.get("format_id")) == format_id and _is_video(f)), None
++        )
++        if chosen is None:
++            raise DownloadError(
++                "That video quality is no longer available. Paste the link again to refresh its qualities."
++            )
++        # Already contains audio, or the source does not report codec details.
++        if chosen.get("acodec") != "none":
++            yield chosen
++            return
++        audio = [
++            f
++            for f in reversed(formats)
++            if f.get("vcodec") == "none"
++            and f.get("acodec") not in (None, "none")
++            and not f.get("has_drm")
++            and f.get("url")
++        ]
++        if not audio:
++            yield chosen  # genuinely silent source
++            return
++        preferred = {"mp4": "m4a", "webm": "webm"}.get(chosen.get("ext"))
++        track = next((f for f in audio if preferred and f.get("ext") == preferred), audio[0])
++        ext = chosen["ext"] if preferred and track.get("ext") == preferred else "mkv"
++        yield {
++            "format_id": f"{chosen['format_id']}+{track['format_id']}",
++            "ext": ext,
++            "requested_formats": [chosen, track],
++            "protocol": f"{chosen['protocol']}+{track['protocol']}",
++            "height": chosen.get("height"),
++            "width": chosen.get("width"),
++            "fps": chosen.get("fps"),
++            "vcodec": chosen.get("vcodec"),
++            "acodec": track.get("acodec"),
++        }
++
++    return select
+--- a/app/services/downloader.py
++++ b/app/services/downloader.py
+@@ -23,6 +23,7 @@
+ from app.config import Config
+ from app.models.schemas import DownloadRequest, PlaylistMode
+ from app.services.diagnostics import ffmpeg_available, js_runtimes
++from app.services.media_formats import select_video_format, video_options
+ from app.utils.logger import get_logger
+ 
+ log = get_logger(__name__)
+@@ -135,6 +136,7 @@
+         "uploader": info.get("uploader"),
+         "filesize_approx": filesize,
+         "resolutions": resolutions,
++        "video_formats": video_options(info),
+         "fps": info.get("fps"),
+         "vcodec": info.get("vcodec"),
+         "acodec": info.get("acodec"),
+@@ -143,9 +145,11 @@
+     }
+ 
+ 
+-def _format_selector(req: DownloadRequest) -> str:
++def _format_selector(req: DownloadRequest) -> str | Callable:
+     if req.audio_only or req.container in _AUDIO_ONLY_CONTAINERS:
+         return "bestaudio/best"
++    if req.video_format_id:
++        return select_video_format(req.video_format_id)
+     cap = "" if req.video_quality == "best" else f"[height<={int(req.video_quality.rstrip('p'))}]"
+     if req.container == "mp4":
+         return f"bestvideo{cap}[ext=mp4]+bestaudio[ext=m4a]/best{cap}[ext=mp4]/bestvideo{cap}+bestaudio/best{cap}"
+@@ -220,7 +224,11 @@
+             "postprocessors": _build_postprocessors(req),
+             "progress_hooks": [progress_hook],
+             "postprocessor_hooks": [progress_hook],
+-            "merge_output_format": (req.container if req.container in {"mp4", "webm"} else None),
++            "merge_output_format": (
++                req.container
++                if not req.video_format_id and req.container in {"mp4", "webm"}
++                else None
++            ),
+         }
+     )
+ 
+--- a/app/models/schemas.py
++++ b/app/models/schemas.py
+@@ -35,6 +35,7 @@
+ class DownloadRequest:
+     url: str
+     container: str = "mp4"  # mp4 | webm | mp3 | m4a | wav | flac
++    video_format_id: str = ""  # literal source format ID; single-video downloads only
+     video_quality: str = "best"  # best | 2160p | 1440p | 1080p | 720p | 480p | 360p
+     audio_only: bool = False
+     audio_quality: str = "best"  # best | 320 | 256 | 192 | 128 (kbps)
+--- a/app/routes/api.py
++++ b/app/routes/api.py
+@@ -72,6 +72,7 @@
+         "url",
+         "container",
+         "video_quality",
++        "video_format_id",
+         "audio_quality",
+         "playlist_mode",
+         "playlist_items",
+@@ -94,6 +95,7 @@
+             url=url,
+             container=body.get("container", "mp4"),
+             video_quality=body.get("video_quality", "best"),
++            video_format_id=body.get("video_format_id", ""),
+             audio_only=bool(body.get("audio_only", False)),
+             audio_quality=body.get("audio_quality", "best"),
+             playlist_mode=body.get("playlist_mode", "single"),
+@@ -112,6 +114,12 @@
+     if req.video_quality not in SUPPORTED_VIDEO_QUALITIES:
+         return _error("Unsupported video quality.", 400)
+ 
++    if len(req.video_format_id) > 200 or any(ord(c) < 32 for c in req.video_format_id):
++        return _error("Invalid source format ID.")
++    if req.video_format_id and (
++        req.playlist_mode != "single" or req.audio_only or req.container not in {"mp4", "webm"}
++    ):
++        return _error("Source video formats can only be selected for a single video download.")
+     if req.audio_quality not in SUPPORTED_AUDIO_QUALITIES:
+         return _error("Unsupported audio quality.")
+     if req.playlist_mode not in {"single", "entire", "selected"}:
+@@ -250,6 +258,12 @@
+         )
+     except ValidationError as exc:
+         return _error(str(exc), 400)
++    if len(req.video_format_id) > 200 or any(ord(c) < 32 for c in req.video_format_id):
++        return _error("Invalid source format ID.")
++    if req.video_format_id and (
++        req.playlist_mode != "single" or req.audio_only or req.container not in {"mp4", "webm"}
++    ):
++        return _error("Source video formats can only be selected for a single video download.")
+     if req.audio_quality not in SUPPORTED_AUDIO_QUALITIES:
+         return _error("Unsupported audio quality.")
+     if req.playlist_mode not in {"single", "entire", "selected"}:
+--- a/app/static/js/downloads.js
++++ b/app/static/js/downloads.js
+@@ -24,6 +24,7 @@
+     containerSelect: document.getElementById("containerSelect"),
+     videoQualityWrap: document.getElementById("videoQualityWrap"),
+     videoQualitySelect: document.getElementById("videoQualitySelect"),
++    videoQualityHint: document.getElementById("videoQualityHint"),
+     audioQualityWrap: document.getElementById("audioQualityWrap"),
+     audioQualitySelect: document.getElementById("audioQualitySelect"),
+     savePathInput: document.getElementById("savePathInput"),
+@@ -49,15 +50,16 @@
+   let lastInfoUrl = "";
+   let fetchTimer = null;
+   let infoGeneration = 0;
++  let currentInfo = null;
++  let fallbackQualities = ["best"];
+ 
+   // ---- Options population --------------------------------------------
+ 
+   async function loadFormats() {
+     const data = await Reel.get("/formats");
+     el.containerSelect.innerHTML = data.containers.map((c) => `<option value="${c}">${c.toUpperCase()}</option>`).join("");
+-    el.videoQualitySelect.innerHTML = data.video_qualities
+-      .map((q) => `<option value="${q}">${q === "best" ? "Best available" : q}</option>`)
+-      .join("");
++    fallbackQualities = data.video_qualities;
++    renderQualityOptions();
+     el.audioQualitySelect.innerHTML = data.audio_qualities
+       .map((q) => `<option value="${q}">${q === "best" ? "Best available" : q + " kbps"}</option>`)
+       .join("");
+@@ -67,6 +69,47 @@
+     const isAudio = AUDIO_CONTAINERS.has(el.containerSelect.value);
+     el.videoQualityWrap.hidden = isAudio;
+     el.audioQualityWrap.hidden = !isAudio;
++    renderQualityOptions();
++  }
++
++  function renderQualityOptions() {
++    const previous = el.videoQualitySelect.value;
++    el.videoQualitySelect.replaceChildren();
++    const add = (value, label) => {
++      const option = document.createElement("option");
++      option.value = value;
++      option.textContent = label;
++      el.videoQualitySelect.appendChild(option);
++    };
++    add("best", "Best available (automatic)");
++    if (currentInfo && !currentInfo.is_playlist) {
++      const formats = currentInfo.video_formats || [];
++      for (const f of formats) {
++        const bits = [f.height ? `${f.height}p` : "Original resolution"];
++        if (f.fps) bits.push(`${f.fps} fps`);
++        bits.push((f.ext || "video").toUpperCase());
++        if (f.vcodec && f.vcodec !== "none") bits.push(f.vcodec.split(".")[0]);
++        if (f.dynamic_range && f.dynamic_range !== "SDR") bits.push(f.dynamic_range);
++        bits.push(f.source_bytes ? `${f.size_estimated ? "~" : ""}${Reel.formatBytes(f.source_bytes)}` : "Size unavailable");
++        bits.push(`#${f.format_id}`);
++        add(`source:${f.format_id}`, bits.join(" · "));
++      }
++      el.videoQualityHint.textContent = formats.length
++        ? "Source stream sizes are shown; ~ means estimated. Separate audio and conversion can change the final size."
++        : "The source did not report individual qualities. Automatic selection is available.";
++    } else if (currentInfo?.is_playlist) {
++      fallbackQualities.filter(q => q !== "best").forEach(q => add(q, `Up to ${q}`));
++      el.videoQualityHint.textContent = "Playlist quality is a maximum per video; available formats differ between items.";
++    } else {
++      el.videoQualityHint.textContent = "Paste a link to check its available qualities.";
++    }
++    if ([...el.videoQualitySelect.options].some(o => o.value === previous)) el.videoQualitySelect.value = previous;
++  }
++
++  function selectedVideoFormat() {
++    if (AUDIO_CONTAINERS.has(el.containerSelect.value) || currentInfo?.is_playlist || lastInfoUrl !== el.urlInput.value.trim()) return null;
++    const value = el.videoQualitySelect.value;
++    return (currentInfo?.video_formats || []).find(f => `source:${f.format_id}` === value) || null;
+   }
+ 
+   // ---- Info preview ----------------------------------------------------
+@@ -75,6 +118,10 @@
+     el.previewCard.hidden = true;
+     el.playlistNotice.hidden = true;
+     lastInfoUrl = "";
++    currentInfo = null;
++    playlistMode = "single";
++    el.videoQualitySelect.value = "best";
++    renderQualityOptions();
+     infoGeneration++;
+   }
+ 
+@@ -94,6 +141,8 @@
+   }
+ 
+   function renderPreview(data) {
++    currentInfo = data;
++    renderQualityOptions();
+     el.previewCard.hidden = false;
+     if (data.is_playlist) {
+       el.previewThumb.src = (data.entries[0] && data.entries[0].thumbnail) || "";
+@@ -104,6 +153,7 @@
+       playlistMode = "single";
+       updatePlaylistModeButtons();
+     } else {
++      playlistMode = "single";
+       el.previewThumb.src = data.thumbnail || "";
+       el.previewTitle.textContent = data.title || "Untitled";
+       const chips = [];
+@@ -134,6 +184,7 @@
+   // ---- URL input: paste / drag&drop / debounce fetch --------------------
+ 
+   function scheduleFetch() {
++    if (el.urlInput.value.trim() !== lastInfoUrl) resetPreview();
+     clearTimeout(fetchTimer);
+     fetchTimer = setTimeout(() => fetchInfo(el.urlInput.value.trim()), 500);
+   }
+@@ -193,10 +244,13 @@
+       return;
+     }
+     const container = el.containerSelect.value;
++    const chosen = selectedVideoFormat();
++    const sourceChoice = el.videoQualitySelect.value.startsWith("source:");
+     const payload = {
+       url,
+       container,
+-      video_quality: el.videoQualitySelect.value,
++      video_quality: sourceChoice ? "best" : el.videoQualitySelect.value,
++      video_format_id: chosen?.format_id || "",
+       audio_only: AUDIO_CONTAINERS.has(container),
+       audio_quality: el.audioQualitySelect.value,
+       playlist_mode: playlistMode,
+@@ -250,7 +304,7 @@
+     } else if (s === "finished") {
+       subBits.push(item.options.save_path ? `Saved to ${item.options.save_path}` : "Ready to download");
+     } else {
+-      subBits.push(item.options.container.toUpperCase(), item.options.video_quality);
++      subBits.push(item.options.container.toUpperCase(), item.options.video_format_id ? `Source #${item.options.video_format_id}` : item.options.video_quality);
+     }
+ 
+     const actions = [];
+--- a/app/templates/index.html
++++ b/app/templates/index.html
+@@ -132,7 +132,8 @@
+           </div>
+           <div class="option" id="videoQualityWrap">
+             <label for="videoQualitySelect">Video quality</label>
+-            <select id="videoQualitySelect"></select>
++            <select id="videoQualitySelect" aria-describedby="videoQualityHint"></select>
++            <p class="hint" id="videoQualityHint" aria-live="polite">Paste a link to check its available qualities.</p>
+           </div>
+           <div class="option" id="audioQualityWrap" hidden>
+             <label for="audioQualitySelect">Audio quality</label>
+--- /dev/null
++++ b/tests/test_media_formats.py
+@@ -0,0 +1,141 @@
++import pytest
++import yt_dlp
++from conftest import sign_in
++
++from app import extensions
++from app.models.schemas import DownloadRequest
++from app.services import downloader
++from app.services.media_formats import select_video_format, video_options
++
++
++def fmt(identity, **values):
++    return {
++        "format_id": identity,
++        "url": "https://example.com/" + identity,
++        "ext": "mp4",
++        "protocol": "https",
++        "vcodec": "avc1",
++        "acodec": "none",
++        "height": 1080,
++        **values,
++    }
++
++
++def test_format_metadata_excludes_audio_drm_and_private_urls():
++    result = video_options(
++        {
++            "duration": 10,
++            "formats": [
++                fmt("a", vcodec="none", acodec="aac"),
++                fmt("drm", has_drm=True),
++                fmt("images", vcodec="images"),
++                fmt("v", fps=60, filesize=123456),
++                fmt("v", fps=60),
++                fmt("est", height=720, filesize_approx=98765),
++                fmt("rate", height=480, tbr=1000),
++                fmt("unknown", height=None),
++            ],
++        }
++    )
++    assert [r["format_id"] for r in result] == ["v", "est", "rate", "unknown"]
++    assert result[0]["source_bytes"] == 123456
++    assert result[0]["size_estimated"] is False
++    assert result[1]["size_estimated"] is True
++    assert result[2]["source_bytes"] == 1250000
++    assert result[3]["source_bytes"] is None
++    assert all("url" not in row for row in result)
++
++
++def test_live_sizes_are_not_extrapolated_from_duration():
++    assert (
++        video_options({"is_live": True, "duration": 100, "formats": [fmt("v", tbr=1000)]})[0][
++            "source_bytes"
++        ]
++        is None
++    )
++
++
++def test_selection_keeps_exact_fps_variant_and_adds_compatible_audio():
++    low = fmt("30", fps=30)
++    high = fmt("60", fps=60)
++    aac = fmt("aac", height=None, ext="m4a", vcodec="none", acodec="aac")
++    opus = fmt("opus", height=None, ext="webm", vcodec="none", acodec="opus")
++    selected = list(select_video_format("30")({"formats": [aac, opus, low, high]}))[0]
++    assert selected["requested_formats"] == [low, aac]
++    assert selected["fps"] == 30
++    assert selected["ext"] == "mp4"
++
++
++def test_combined_source_does_not_add_duplicate_audio():
++    muxed = fmt("mux", acodec="aac")
++    assert list(select_video_format("mux")({"formats": [muxed]})) == [muxed]
++
++
++def test_cross_container_audio_uses_mkv_intermediate():
++    source = fmt("video")
++    audio = fmt("audio", ext="webm", vcodec="none", acodec="opus")
++    assert list(select_video_format("video")({"formats": [source, audio]}))[0]["ext"] == "mkv"
++
++
++def test_missing_format_has_no_silent_fallback():
++    with pytest.raises(downloader.DownloadError, match="no longer available"):
++        list(select_video_format("missing")({"formats": [fmt("other")]}))
++
++
++def test_id_is_literal_not_a_selector_expression():
++    with pytest.raises(downloader.DownloadError):
++        list(select_video_format("bestvideo+bestaudio/best")({"formats": [fmt("other")]}))
++
++
++def test_current_ytdlp_accepts_custom_merged_selector():
++    options = {"quiet": True, "format": select_video_format("chosen")}
++    with yt_dlp.YoutubeDL(options) as ydl:
++        result = ydl.process_ie_result(
++            {
++                "id": "fixture",
++                "title": "Fixture",
++                "formats": [
++                    fmt("audio", ext="m4a", vcodec="none", acodec="aac", height=None),
++                    fmt("chosen", fps=30),
++                    fmt("other", fps=60),
++                ],
++            },
++            download=False,
++        )
++    assert result["requested_formats"][0]["format_id"] == "chosen"
++    assert result["requested_formats"][1]["format_id"] == "audio"
++
++
++@pytest.mark.parametrize(
++    "patch",
++    [
++        {"video_format_id": 123},
++        {"video_format_id": "x" * 201},
++        {"video_format_id": "137", "playlist_mode": "entire"},
++        {"video_format_id": "137", "container": "mp3"},
++        {"video_format_id": "137", "audio_only": True},
++    ],
++)
++def test_invalid_format_requests_rejected(app, client, patch):
++    headers = sign_in(app, client)
++    response = client.post(
++        "/api/download", json={"url": "https://example.com/v", **patch}, headers=headers
++    )
++    assert response.status_code == 400
++
++
++def test_selected_id_reaches_queue(app, client, monkeypatch):
++    headers = sign_in(app, client)
++    monkeypatch.setattr(extensions.queue_manager._pending, "put", lambda task: None)
++    monkeypatch.setattr(downloader, "ffmpeg_available", lambda: True)
++    response = client.post(
++        "/api/download",
++        json={"url": "https://example.com/v", "video_format_id": "137"},
++        headers=headers,
++    )
++    assert response.status_code == 201
++    item = extensions.queue_manager.get(response.json["task_id"])
++    assert item["options"]["video_format_id"] == "137"
++    assert callable(
++        downloader._format_selector(DownloadRequest(url=item["url"], video_format_id="137"))
++    )
+--- a/tests/test_downloads.py
++++ b/tests/test_downloads.py
+@@ -114,3 +114,14 @@
+     assert path.suffix == "." + container
+     assert path.stat().st_size > 0
+     assert len(info["_output_files"]) == 1
++
++
++def test_real_download_of_preview_selected_format(local_media, tmp_path):
++    metadata = downloader.extract_info(local_media)
++    assert metadata["video_formats"]
++    source_id = metadata["video_formats"][0]["format_id"]
++    req = DownloadRequest(url=local_media, container="mp4", video_format_id=source_id)
++    info = downloader.run_download(req, str(tmp_path), lambda event: None, lambda: False)
++    path = Path(downloader.resolve_final_filepath(info, req, str(tmp_path)))
++    assert path.suffix == ".mp4"
++    assert path.stat().st_size > 0
+--- a/README.md
++++ b/README.md
+@@ -69,7 +69,7 @@
+ 
+ | Area | Options |
+ |---|---|
+-| Video | MP4, WebM; best, 2160p, 1440p, 1080p, 720p, 480p, 360p caps |
++| Video | MP4/WebM output; detected source formats for individual videos, automatic selection, or per-item quality caps for playlists |
+ | Audio | MP3, M4A, WAV, FLAC; best or 128/192/256/320 kbps where applicable |
+ | Extras | English subtitles where available, supported thumbnail embedding, metadata, optional SponsorBlock |
+ | Playlists | Single linked video, entire playlist, selected indexes such as `1,3,5-8` |
+@@ -152,3 +152,13 @@
+ Tests use synthetic one-second video/audio and a local HTTP server for actual yt-dlp/FFmpeg download/conversion. No third-party credentials or media are needed. See `VALIDATION.md` for the verification performed on this delivery.
+ 
+ Use this tool for media you have permission to download, within the relevant platform's rules.
++
++## Available video qualities
++
++After pasting a single-video link, the Video quality dropdown lists the source formats reported by yt-dlp: resolution, frame rate, source container, codec, HDR range when reported, and source-stream size when known. A `~` prefix means an estimate; missing sizes are explicitly labeled. DRM formats and audio-only streams are excluded from this video list.
++
++Selecting a listed option requests that exact source format, with an appropriate audio-only track added when needed. The Format dropdown still controls the final output container; converting between containers/codecs may take additional time. Stream sizes exclude separately downloaded audio and may differ from final sizes after conversion. Format IDs are treated as literal identifiers, never executable selector expressions. If an ID is unavailable when the job starts, the app asks you to refresh the link instead of silently choosing another quality.
++
++Automatic selection remains available. Playlists use the original per-video maximum caps because entries can have different source formats. Switching to MP3/M4A/WAV/FLAC uses the audio settings and clears the source-video selection from the request. Changing the pasted URL clears the old preview and its selected format. Retrying a queued job preserves its source choice; downloading again from history uses the saved output settings and resolves formats anew.
++
++The included `updates/available-download-formats.patch` is an alternative to copying files: apply it to the prior login-fixed version using `git apply --check` followed by `git apply`. It includes the implementation, tests and documentation. If the check fails because your local files differ, review the differences rather than forcing the patch.
+--- a/VALIDATION.md
++++ b/VALIDATION.md
+@@ -28,3 +28,9 @@
+ Reproduced five failures in the previous code: an anonymous favicon request, an unmatched URL, a protected API poll, a protected page request, or a poll after an account reset cleared the login form's CSRF session. The authentication guard now preserves the session on access denial and lets Flask handle unmatched routes normally. Login/logout still rotate/clear the session; invalid account versions still cannot access protected routes.
+ 
+ All 27 authentication/API tests passed after this fix, including six added regression/security cases. The original media conversion code is unchanged. Missing and mismatched CSRF tokens are still rejected. Full browser interaction remains unverified as described above.
++
++## Available-format selection — 6 October 2026
++
++The latest full Python test suite passed **51 tests**, including all previous login-session regressions. Added checks cover public format metadata, missing/estimated sizes, live streams, DRM/audio exclusion, exact source/FPS selection, compatible audio merging, a cross-container intermediate, rejection of stale source IDs, literal handling of IDs, request validation and preservation of the chosen ID in the queue. A synthetic local HTTP media file was inspected and downloaded using the exact format ID returned by the preview. The installed yt-dlp also processed a synthetic split-video/audio selection without downloading from a third-party site.
++
++DOM interaction checks ran the actual dashboard JavaScript in Happy DOM: option labels, exact format submission, audio-only switching, stale selection clearing on URL changes, and playlist caps passed. These are simulated DOM checks, not a full browser rendering test. Ruff and JavaScript syntax checks passed. Live platform availability remains unverified in this environment; the user reported that downloads worked locally before this feature update.

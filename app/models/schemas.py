@@ -35,6 +35,7 @@ class PlaylistMode(str, Enum):
 class DownloadRequest:
     url: str
     container: str = "mp4"  # mp4 | webm | mp3 | m4a | wav | flac
+    video_format_id: str = ""  # literal source format ID; single-video downloads only
     video_quality: str = "best"  # best | 2160p | 1440p | 1080p | 720p | 480p | 360p
     audio_only: bool = False
     audio_quality: str = "best"  # best | 320 | 256 | 192 | 128 (kbps)

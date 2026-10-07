@@ -69,7 +69,7 @@ python3 -m venv .venv
 
 | Area | Options |
 |---|---|
-| Video | MP4, WebM; best, 2160p, 1440p, 1080p, 720p, 480p, 360p caps |
+| Video | MP4/WebM output; detected source formats for individual videos, automatic selection, or per-item quality caps for playlists |
 | Audio | MP3, M4A, WAV, FLAC; best or 128/192/256/320 kbps where applicable |
 | Extras | English subtitles where available, supported thumbnail embedding, metadata, optional SponsorBlock |
 | Playlists | Single linked video, entire playlist, selected indexes such as `1,3,5-8` |
@@ -152,3 +152,13 @@ This reads HOST/PORT from the same configuration and uses a single process. Do n
 Tests use synthetic one-second video/audio and a local HTTP server for actual yt-dlp/FFmpeg download/conversion. No third-party credentials or media are needed. See `VALIDATION.md` for the verification performed on this delivery.
 
 Use this tool for media you have permission to download, within the relevant platform's rules.
+
+## Available video qualities
+
+After pasting a single-video link, the Video quality dropdown lists the source formats reported by yt-dlp: resolution, frame rate, source container, codec, HDR range when reported, and source-stream size when known. A `~` prefix means an estimate; missing sizes are explicitly labeled. DRM formats and audio-only streams are excluded from this video list.
+
+Selecting a listed option requests that exact source format, with an appropriate audio-only track added when needed. The Format dropdown still controls the final output container; converting between containers/codecs may take additional time. Stream sizes exclude separately downloaded audio and may differ from final sizes after conversion. Format IDs are treated as literal identifiers, never executable selector expressions. If an ID is unavailable when the job starts, the app asks you to refresh the link instead of silently choosing another quality.
+
+Automatic selection remains available. Playlists use the original per-video maximum caps because entries can have different source formats. Switching to MP3/M4A/WAV/FLAC uses the audio settings and clears the source-video selection from the request. Changing the pasted URL clears the old preview and its selected format. Retrying a queued job preserves its source choice; downloading again from history uses the saved output settings and resolves formats anew.
+
+The included `updates/available-download-formats.patch` is an alternative to copying files: apply it to the prior login-fixed version using `git apply --check` followed by `git apply`. It includes the implementation, tests and documentation. If the check fails because your local files differ, review the differences rather than forcing the patch.

@@ -72,6 +72,7 @@ def start_download():
         "url",
         "container",
         "video_quality",
+        "video_format_id",
         "audio_quality",
         "playlist_mode",
         "playlist_items",
@@ -94,6 +95,7 @@ def start_download():
             url=url,
             container=body.get("container", "mp4"),
             video_quality=body.get("video_quality", "best"),
+            video_format_id=body.get("video_format_id", ""),
             audio_only=bool(body.get("audio_only", False)),
             audio_quality=body.get("audio_quality", "best"),
             playlist_mode=body.get("playlist_mode", "single"),
@@ -112,6 +114,12 @@ def start_download():
     if req.video_quality not in SUPPORTED_VIDEO_QUALITIES:
         return _error("Unsupported video quality.", 400)
 
+    if len(req.video_format_id) > 200 or any(ord(c) < 32 for c in req.video_format_id):
+        return _error("Invalid source format ID.")
+    if req.video_format_id and (
+        req.playlist_mode != "single" or req.audio_only or req.container not in {"mp4", "webm"}
+    ):
+        return _error("Source video formats can only be selected for a single video download.")
     if req.audio_quality not in SUPPORTED_AUDIO_QUALITIES:
         return _error("Unsupported audio quality.")
     if req.playlist_mode not in {"single", "entire", "selected"}:
@@ -250,6 +258,12 @@ def redownload(entry_id: int):
         )
     except ValidationError as exc:
         return _error(str(exc), 400)
+    if len(req.video_format_id) > 200 or any(ord(c) < 32 for c in req.video_format_id):
+        return _error("Invalid source format ID.")
+    if req.video_format_id and (
+        req.playlist_mode != "single" or req.audio_only or req.container not in {"mp4", "webm"}
+    ):
+        return _error("Source video formats can only be selected for a single video download.")
     if req.audio_quality not in SUPPORTED_AUDIO_QUALITIES:
         return _error("Unsupported audio quality.")
     if req.playlist_mode not in {"single", "entire", "selected"}:
